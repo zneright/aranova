@@ -172,8 +172,8 @@ impl AranovaContract {
         env.storage().instance().set(&DataKey::CoopLimit(driver), &limit);
     }
 
-    /// Automatically deducts from Coop Wallet -> Sends to target pump.
-    pub fn issue_fuel_credit(env: Env, driver: Address, coop_wallet: Address, target_pump: Address, token_addr: Address, amount: i128) {
+    /// Automatically deducts from Coop Wallet -> Sends directly to Driver Wallet.
+    pub fn issue_fuel_credit(env: Env, driver: Address, coop_wallet: Address, token_addr: Address, amount: i128) {
         driver.require_auth(); 
         
         // 1. Check Limits & Existing Debt
@@ -184,9 +184,9 @@ impl AranovaContract {
         let limit: i128 = env.storage().instance().get(&DataKey::CoopLimit(driver.clone())).unwrap_or(0);
         if amount > limit { panic!("Exceeds Cooperative approved limit."); }
 
-        // 2. Transfer from Coop to Pump (Coop must have granted allowance to contract)
+        // 2. Transfer from Coop DIRECTLY TO DRIVER
         let client = token::Client::new(&env, &token_addr);
-        client.transfer(&coop_wallet, &target_pump, &amount);
+        client.transfer(&coop_wallet, &driver, &amount);
 
         // 3. Record the Loan
         let new_loan = FuelLoan {
@@ -202,7 +202,10 @@ impl AranovaContract {
     pub fn repay_fuel_credit(env: Env, driver: Address, token_addr: Address) {
         driver.require_auth();
         
-        let loan: FuelLoan = env.storage().instance().get(&DataKey::ActiveFuelLoan(driver.clone())).unwrap();
+        // Handle gracefully if no active loan is found
+        let loan: FuelLoan = env.storage().instance().get(&DataKey::ActiveFuelLoan(driver.clone()))
+            .unwrap_or(FuelLoan { principal: 0, timestamp: 0, coop_wallet: driver.clone() });
+            
         if loan.principal == 0 { panic!("No active fuel credit."); }
 
         let admin_fee = (loan.principal * 20) / BPS_DIVIDER; // 0.2%
@@ -279,9 +282,8 @@ impl AranovaContract {
             .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 0, balance: 0, unlock_time: 0 })
     }
 
-    pub fn get_active_fuel_loan(env: Env, driver: Address) -> FuelLoan {
-        let dummy_coop = Address::from_string(&soroban_sdk::String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));
+    // FIX: Using Option<FuelLoan> prevents the contract from crashing due to dummy address generation logic
+    pub fn get_active_fuel_loan(env: Env, driver: Address) -> Option<FuelLoan> {
         env.storage().instance().get(&DataKey::ActiveFuelLoan(driver))
-            .unwrap_or(FuelLoan { principal: 0, timestamp: 0, coop_wallet: dummy_coop })
     }
 }
