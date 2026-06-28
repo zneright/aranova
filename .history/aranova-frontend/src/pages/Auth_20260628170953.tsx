@@ -14,7 +14,6 @@ type AuthMode = "login" | "signup";
 type ModalType = "terms" | "privacy" | null;
 type RoleType = "commuter" | "driver" | "cooperative" | "admin";
 type WalletMode = "create" | "connect" | null;
-type NetworkType = "TESTNET" | "PUBLIC";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 const S = {
@@ -90,7 +89,6 @@ const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, 
 const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<AuthMode>("login");
   const [legal, setLegal] = useState<ModalType>(null);
-  const [network, setNetwork] = useState<NetworkType>("TESTNET");
 
   const [authSuccess, setAuthSuccess] = useState(false);
 
@@ -166,16 +164,12 @@ const AuthPage: React.FC = () => {
     try {
       let walletModule;
 
-      // Using ts-ignore resolves the conflicting parameter types across different
-      // versions of the stellar-wallets-kit modules without breaking compilation
+      // Instantiate modules directly (no 'sdk.' prefix)
       if (walletId === 'freighter') {
-        // @ts-ignore
         walletModule = new FreighterModule();
       } else if (walletId === 'xbull') {
-        // @ts-ignore
         walletModule = new xBullModule();
       } else if (walletId === 'lobstr') {
-        // @ts-ignore
         walletModule = new LobstrModule();
       }
 
@@ -200,12 +194,8 @@ const AuthPage: React.FC = () => {
       // Signature Request
       try {
         const authMessage = `Aranova Authentication\n\nPlease sign to verify ownership.\nTimestamp: ${Date.now()}`;
-        const currentNetworkPassphrase = network === "PUBLIC"
-          ? "Public Global Stellar Network ; September 2015"
-          : "Test SDF Network ; September 2015";
-
         await walletModule.signMessage(authMessage, {
-          networkPassphrase: currentNetworkPassphrase,
+          networkPassphrase: "Public Global Stellar Network ; September 2015",
           address: publicKey
         });
       } catch (signError) {
@@ -322,6 +312,7 @@ const AuthPage: React.FC = () => {
             await setDoc(doc(db, "users", user.uid), updateData, { merge: true });
           }
 
+          // ONLY navigate AFTER the wallet is successfully saved to the database
           if (form.email.includes("admin")) navigate("/admin");
           else navigate("/user");
         }
@@ -334,7 +325,10 @@ const AuthPage: React.FC = () => {
 
         if (userDoc.exists()) {
           const userData = userDoc.data();
+
+          // FIX: Prevent unapproved users from going to wallet setup.
           if (userData.approved === false) {
+            // Go straight to dashboard to see "Pending" screen
             if (userData.role === "admin" || form.email.includes("admin")) navigate("/admin");
             else navigate("/user");
           } else if (userData.walletCreated === false || !userData.publicKey) {
@@ -344,6 +338,7 @@ const AuthPage: React.FC = () => {
             else navigate("/user");
           }
         } else {
+          // Fallback if document is somehow missing
           setAuthSuccess(true);
         }
       }
@@ -370,10 +365,12 @@ const AuthPage: React.FC = () => {
 
         await setDoc(doc(db, "users", user.uid), userData);
 
+        // FIX: Only send auto-approved users (Commuters) to Wallet Setup immediately
         if (isApproved) {
           setMode("login");
           setAuthSuccess(true);
         } else {
+          // Send unapproved users straight to their dashboard intercept screen
           if (form.email.includes("admin") || role === "admin") navigate("/admin");
           else navigate("/user");
         }
@@ -419,10 +416,11 @@ const AuthPage: React.FC = () => {
   return (
     <>
       <style>{`
+        /* CSS FIX: Fixed page layout, strictly scrolling only inside the right content block */
         .auth-layout { 
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; 
-          height: 100vh;
-          overflow: hidden; 
+          height: 100vh; /* Strictly lock to window height */
+          overflow: hidden; /* Prevent body scrolling entirely */
           display: flex; 
           flex-direction: column; 
           background: #F8F7F4; 
@@ -437,20 +435,21 @@ const AuthPage: React.FC = () => {
           padding: 0; 
           flex: 1; 
           background: #ffffff; 
-          overflow-y: auto; 
-          position: relative;
+          overflow-y: auto; /* Magic line: Makes ONLY this container scrollable */
         }
         .auth-right-content { 
           max-width: 480px; width: 100%; margin: 0 auto; 
-          padding: 2rem 1.25rem; 
+          padding: 2rem 1.25rem; /* Re-apply padding inside the scrollable container */
         }
         .vehicle-icons { display: none; }
         
+        /* Mobile specific fixes */
         @media (max-width: 767px) {
            .auth-left { padding: 2rem 1.5rem; height: 250px; flex: none; }
            .auth-right { border-radius: 24px 24px 0 0; margin-top: -20px; z-index: 10; box-shadow: 0 -4px 20px rgba(0,0,0,0.05); }
         }
 
+        /* Desktop split screen */
         @media (min-width: 768px) {
           .auth-layout { display: grid; grid-template-columns: 1fr 1.2fr; }
           .auth-left { padding: 4rem 2rem; justify-content: center; height: 100vh; }
@@ -465,7 +464,7 @@ const AuthPage: React.FC = () => {
         {/* ── LEFT PANEL — Illustration ── */}
         <div className="auth-left">
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: "2rem" }}>
-            <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
+            <img src="/logo_svg.svg" alt="Mobilis Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
           </div>
           <div style={{ textAlign: "center", marginBottom: "1.5rem", zIndex: 1 }}>
             <h2 style={{ color: "#fff", fontSize: 32, fontWeight: 900, letterSpacing: "-1px", margin: "0 0 12px", lineHeight: 1.2 }}>Finance that works<br /><span style={{ color: "#FCD34D" }}>even without signal</span></h2>
@@ -480,25 +479,6 @@ const AuthPage: React.FC = () => {
 
         {/* ── RIGHT PANEL — Form ── */}
         <div className="auth-right">
-
-          {/* Network Toggle Pill */}
-          <div style={{ position: "absolute", top: "1.5rem", right: "1.5rem", zIndex: 50 }}>
-            <button
-              onClick={() => setNetwork(network === "TESTNET" ? "PUBLIC" : "TESTNET")}
-              style={{
-                background: network === "TESTNET" ? "#FEF3C7" : "#D1FAE5",
-                color: network === "TESTNET" ? "#92400E" : "#065F46",
-                border: `1px solid ${network === "TESTNET" ? "#FDE68A" : "#A7F3D0"}`,
-                padding: "8px 16px", borderRadius: "50px", fontSize: "12px", fontWeight: 800,
-                cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
-                transition: "all 0.2s ease",
-              }}
-            >
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: network === "TESTNET" ? "#D97706" : "#10B981" }}></div>
-              {network === "TESTNET" ? "TESTNET" : "MAINNET"}
-            </button>
-          </div>
-
           <div className="auth-right-content">
 
             {/* Global Context-Aware Back Button */}

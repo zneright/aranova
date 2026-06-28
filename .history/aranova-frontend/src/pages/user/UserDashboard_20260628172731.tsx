@@ -301,6 +301,7 @@ const UserDashboard: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
+    // FIXED: Listen actively to Firebase auth state so it doesn't get stuck on reload
     const unsubscribe = auth.onAuthStateChanged(async (user) => {
       if (user) {
         try {
@@ -356,7 +357,7 @@ const UserDashboard: React.FC = () => {
           .dash-col-side { grid-column: 1 !important; }
         }
       `}</style>
-      <UserLayout activeTab={activeTab} onTabChange={setActiveTab} userData={userData}>
+      <UserLayout activeTab={activeTab} onTabChange={setActiveTab}>
         {userData.role === "commuter" && <CommuterContent userData={userData} />}
         {userData.role === "driver" && <DriverContent userData={userData} />}
         {userData.role === "cooperative" && <CooperativeContent userData={userData} />}

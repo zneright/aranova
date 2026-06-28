@@ -5,16 +5,16 @@ import { doc, setDoc, getDoc, collection, query, where, getDocs } from "firebase
 import { Keypair } from "@stellar/stellar-sdk";
 import CryptoJS from "crypto-js";
 import { auth, db } from "../firebase/config";
-import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
+
+// --- WILDCARD IMPORT: Bypasses Vite's strict static analysis crashes! ---
+import * as SWK from '@creit.tech/stellar-wallets-kit';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AuthMode = "login" | "signup";
 type ModalType = "terms" | "privacy" | null;
+// FIXED: Added "admin" to clear the TypeScript overlapping error
 type RoleType = "commuter" | "driver" | "cooperative" | "admin";
 type WalletMode = "create" | "connect" | null;
-type NetworkType = "TESTNET" | "PUBLIC";
 
 // ─── Shared styles ────────────────────────────────────────────────────────────
 const S = {
@@ -90,7 +90,6 @@ const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, 
 const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<AuthMode>("login");
   const [legal, setLegal] = useState<ModalType>(null);
-  const [network, setNetwork] = useState<NetworkType>("TESTNET");
 
   const [authSuccess, setAuthSuccess] = useState(false);
 
@@ -161,68 +160,56 @@ const AuthPage: React.FC = () => {
 
   const connectSpecificWallet = async (walletId: string) => {
     setErrors({ ...errors, wallet: "" });
-    setLoading(true);
 
     try {
-      let walletModule;
+      const sdk = SWK as any;
+      const KitClass = sdk.StellarWalletsKit || (sdk.default && sdk.default.StellarWalletsKit);
 
-      // Using ts-ignore resolves the conflicting parameter types across different
-      // versions of the stellar-wallets-kit modules without breaking compilation
-      if (walletId === 'freighter') {
-        // @ts-ignore
-        walletModule = new FreighterModule();
-      } else if (walletId === 'xbull') {
-        // @ts-ignore
-        walletModule = new xBullModule();
-      } else if (walletId === 'lobstr') {
-        // @ts-ignore
-        walletModule = new LobstrModule();
+      if (!KitClass) {
+        throw new Error("StellarWalletsKit core could not be found.");
       }
 
-      if (!walletModule) {
-        throw new Error(`The ${walletId} module could not be initialized.`);
+      // Initialize ONLY the specific module requested to prevent overlapping conflicts
+      let activeModules = [];
+      if (walletId === 'freighter' && typeof sdk.FreighterModule === "function") activeModules.push(new sdk.FreighterModule());
+      if (walletId === 'xbull' && typeof sdk.xBullModule === "function") activeModules.push(new sdk.xBullModule());
+      if (walletId === 'lobstr' && typeof sdk.LobstrModule === "function") activeModules.push(new sdk.LobstrModule());
+
+      const kit = new KitClass({
+        network: "PUBLIC",
+        selectedWalletId: walletId,
+        modules: activeModules
+      });
+
+      // Explicitly set the wallet in case the kit requires it prior to key request
+      if (typeof kit.setWallet === 'function') {
+        kit.setWallet(walletId);
       }
 
-      // Check availability
-      const isAvailable = await walletModule.isAvailable();
-      if (!isAvailable) {
-        throw new Error(`${walletId.toUpperCase()} is not installed/detected.`);
+      // Handle Stellar Wallets Kit version differences (v2 uses getPublicKey, v3 uses getAddress)
+      let publicKey = "";
+      if (typeof kit.getPublicKey === 'function') {
+        publicKey = await kit.getPublicKey();
+      } else if (typeof kit.getAddress === 'function') {
+        publicKey = await kit.getAddress();
+      } else {
+        throw new Error("Kit missing both getPublicKey and getAddress methods. Check library version.");
       }
-
-      // Get address
-      const response = await walletModule.getAddress();
-      const publicKey = response.address;
 
       if (!publicKey) {
-        throw new Error("Wallet did not return a valid public key.");
-      }
-
-      // Signature Request
-      try {
-        const authMessage = `Aranova Authentication\n\nPlease sign to verify ownership.\nTimestamp: ${Date.now()}`;
-        const currentNetworkPassphrase = network === "PUBLIC"
-          ? "Public Global Stellar Network ; September 2015"
-          : "Test SDF Network ; September 2015";
-
-        await walletModule.signMessage(authMessage, {
-          networkPassphrase: currentNetworkPassphrase,
-          address: publicKey
-        });
-      } catch (signError) {
-        throw new Error("Signature request rejected by user.");
+        throw new Error("Extension did not return a key.");
       }
 
       setConnectPubKey(publicKey);
+
+      // Successfully connected! Submit immediately.
       await autoSubmitExternalWallet(publicKey);
 
     } catch (error: any) {
       console.error(`${walletId} connection failed:`, error);
-      setErrors({ wallet: error.message });
-    } finally {
-      setLoading(false);
+      setErrors({ ...errors, wallet: `Failed to connect. Please ensure the ${walletId} extension is installed and unlocked in your browser.` });
     }
   };
-
   // Immediate save & redirect function
   const autoSubmitExternalWallet = async (pubKey: string) => {
     setLoading(true);
@@ -306,7 +293,6 @@ const AuthPage: React.FC = () => {
     setErrors({});
 
     try {
-      // ─── STAGE 3: SAVING THE WALLET & NAVIGATING TO DASHBOARD ───
       if (authSuccess) {
         const user = auth.currentUser;
         if (user) {
@@ -326,29 +312,26 @@ const AuthPage: React.FC = () => {
           else navigate("/user");
         }
       }
-
-      // ─── STAGE 2: LOGGING IN ───
       else if (isLogin) {
         const cred = await signInWithEmailAndPassword(auth, form.email, form.password);
         const userDoc = await getDoc(doc(db, "users", cred.user.uid));
 
         if (userDoc.exists()) {
           const userData = userDoc.data();
-          if (userData.approved === false) {
-            if (userData.role === "admin" || form.email.includes("admin")) navigate("/admin");
-            else navigate("/user");
-          } else if (userData.walletCreated === false || !userData.publicKey) {
+
+          if (userData.role === "admin" || form.email.includes("admin")) {
+            navigate("/admin");
+          } else if (userData.approved === true && userData.walletCreated === false) {
             setAuthSuccess(true);
           } else {
-            if (userData.role === "admin" || form.email.includes("admin")) navigate("/admin");
-            else navigate("/user");
+            navigate("/user");
           }
+        } else if (form.email.includes("admin")) {
+          navigate("/admin");
         } else {
-          setAuthSuccess(true);
+          navigate("/user");
         }
       }
-
-      // ─── STAGE 1: SIGNING UP ───
       else {
         const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
         const user = userCredential.user;
@@ -419,10 +402,11 @@ const AuthPage: React.FC = () => {
   return (
     <>
       <style>{`
+        /* CSS FIX: Fixed page layout, strictly scrolling only inside the right content block */
         .auth-layout { 
           font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; 
-          height: 100vh;
-          overflow: hidden; 
+          height: 100vh; /* Strictly lock to window height */
+          overflow: hidden; /* Prevent body scrolling entirely */
           display: flex; 
           flex-direction: column; 
           background: #F8F7F4; 
@@ -437,20 +421,21 @@ const AuthPage: React.FC = () => {
           padding: 0; 
           flex: 1; 
           background: #ffffff; 
-          overflow-y: auto; 
-          position: relative;
+          overflow-y: auto; /* Magic line: Makes ONLY this container scrollable */
         }
         .auth-right-content { 
           max-width: 480px; width: 100%; margin: 0 auto; 
-          padding: 2rem 1.25rem; 
+          padding: 2rem 1.25rem; /* Re-apply padding inside the scrollable container */
         }
         .vehicle-icons { display: none; }
         
+        /* Mobile specific fixes */
         @media (max-width: 767px) {
            .auth-left { padding: 2rem 1.5rem; height: 250px; flex: none; }
            .auth-right { border-radius: 24px 24px 0 0; margin-top: -20px; z-index: 10; box-shadow: 0 -4px 20px rgba(0,0,0,0.05); }
         }
 
+        /* Desktop split screen */
         @media (min-width: 768px) {
           .auth-layout { display: grid; grid-template-columns: 1fr 1.2fr; }
           .auth-left { padding: 4rem 2rem; justify-content: center; height: 100vh; }
@@ -465,7 +450,7 @@ const AuthPage: React.FC = () => {
         {/* ── LEFT PANEL — Illustration ── */}
         <div className="auth-left">
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: "2rem" }}>
-            <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
+            <img src="/logo_svg.svg" alt="Mobilis Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
           </div>
           <div style={{ textAlign: "center", marginBottom: "1.5rem", zIndex: 1 }}>
             <h2 style={{ color: "#fff", fontSize: 32, fontWeight: 900, letterSpacing: "-1px", margin: "0 0 12px", lineHeight: 1.2 }}>Finance that works<br /><span style={{ color: "#FCD34D" }}>even without signal</span></h2>
@@ -480,25 +465,6 @@ const AuthPage: React.FC = () => {
 
         {/* ── RIGHT PANEL — Form ── */}
         <div className="auth-right">
-
-          {/* Network Toggle Pill */}
-          <div style={{ position: "absolute", top: "1.5rem", right: "1.5rem", zIndex: 50 }}>
-            <button
-              onClick={() => setNetwork(network === "TESTNET" ? "PUBLIC" : "TESTNET")}
-              style={{
-                background: network === "TESTNET" ? "#FEF3C7" : "#D1FAE5",
-                color: network === "TESTNET" ? "#92400E" : "#065F46",
-                border: `1px solid ${network === "TESTNET" ? "#FDE68A" : "#A7F3D0"}`,
-                padding: "8px 16px", borderRadius: "50px", fontSize: "12px", fontWeight: 800,
-                cursor: "pointer", display: "flex", alignItems: "center", gap: "6px",
-                transition: "all 0.2s ease",
-              }}
-            >
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: network === "TESTNET" ? "#D97706" : "#10B981" }}></div>
-              {network === "TESTNET" ? "TESTNET" : "MAINNET"}
-            </button>
-          </div>
-
           <div className="auth-right-content">
 
             {/* Global Context-Aware Back Button */}
@@ -728,17 +694,15 @@ const AuthPage: React.FC = () => {
                       Click your installed wallet below to connect securely. Or manually paste your public key at the bottom.
                     </p>
 
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "2rem" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "2rem" }}>
                       <button onClick={() => connectSpecificWallet('freighter')} style={{ ...S.ghostBtn, padding: "10px" }}>
                         Freighter
                       </button>
                       <button onClick={() => connectSpecificWallet('xbull')} style={{ ...S.ghostBtn, padding: "10px" }}>
-                        xBull
-                      </button>
-                      <button onClick={() => connectSpecificWallet('lobstr')} style={{ ...S.ghostBtn, padding: "10px" }}>
-                        LOBSTR
+                        xBull / Lobstr
                       </button>
                     </div>
+
                     <div style={{ borderTop: "1px solid #E5E7EB", margin: "1rem 0" }}></div>
 
                     <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 12, fontWeight: 700 }}>

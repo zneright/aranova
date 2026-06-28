@@ -166,17 +166,15 @@ const AuthPage: React.FC = () => {
     try {
       let walletModule;
 
-      // Using ts-ignore resolves the conflicting parameter types across different
-      // versions of the stellar-wallets-kit modules without breaking compilation
+      // FIX: Ensure parameters are passed to satisfy TypeScript definitions
+      const walletParams = { network } as any;
+
       if (walletId === 'freighter') {
-        // @ts-ignore
-        walletModule = new FreighterModule();
+        walletModule = new FreighterModule(walletParams);
       } else if (walletId === 'xbull') {
-        // @ts-ignore
-        walletModule = new xBullModule();
+        walletModule = new xBullModule(walletParams);
       } else if (walletId === 'lobstr') {
-        // @ts-ignore
-        walletModule = new LobstrModule();
+        walletModule = new LobstrModule(walletParams);
       }
 
       if (!walletModule) {
@@ -465,7 +463,7 @@ const AuthPage: React.FC = () => {
         {/* ── LEFT PANEL — Illustration ── */}
         <div className="auth-left">
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: "2rem" }}>
-            <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
+            <img src="/logo_svg.svg" alt="Mobilis Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
           </div>
           <div style={{ textAlign: "center", marginBottom: "1.5rem", zIndex: 1 }}>
             <h2 style={{ color: "#fff", fontSize: 32, fontWeight: 900, letterSpacing: "-1px", margin: "0 0 12px", lineHeight: 1.2 }}>Finance that works<br /><span style={{ color: "#FCD34D" }}>even without signal</span></h2>

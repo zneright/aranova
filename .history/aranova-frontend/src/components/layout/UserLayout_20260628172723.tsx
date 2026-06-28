@@ -48,7 +48,7 @@ const IconUser = () => (
 const IconSettings = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
   </svg>
 );
 const IconLogout = () => (
@@ -108,13 +108,11 @@ interface UserLayoutProps {
   children: React.ReactNode;
   activeTab?: string;
   onTabChange?: (tab: string) => void;
-  userData?: any;
 }
 
 const UserLayout: React.FC<UserLayoutProps> = ({
   children,
   activeTab = "wallet",
-  userData
 }) => {
   const [dark, setDark] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -122,12 +120,6 @@ const UserLayout: React.FC<UserLayoutProps> = ({
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Dynamic user fields
-  const displayName = userData?.displayName || userData?.coopName || "User";
-  const email = userData?.email || "user@aranova.ph";
-  const initials = displayName.substring(0, 2).toUpperCase();
-  const roleDisplay = userData?.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "Commuter";
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -204,7 +196,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({
         style={{
           display: "flex",
           flexDirection: "column",
-          height: "100dvh", // Forces strict height for mobile sizing
+          minHeight: "100vh",
           background: t.bgPage,
           color: t.textPrim,
           fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -221,7 +213,8 @@ const UserLayout: React.FC<UserLayoutProps> = ({
             alignItems: "center",
             justifyContent: "space-between",
             padding: "0 24px",
-            flexShrink: 0,
+            position: "sticky",
+            top: 0,
             zIndex: 100,
             gap: 12,
             transition: "background .2s, border .2s",
@@ -292,7 +285,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                 textTransform: "uppercase"
               }}
             >
-              Testnet
+              Testnet Active
             </div>
 
             {/* Offline pill */}
@@ -314,7 +307,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                   display: "inline-block",
                 }}
               />
-              {!isMobile && "Offline Ready"}
+              Offline Ready
             </div>
 
             {/* Dark mode toggle */}
@@ -360,9 +353,9 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                     fontSize: 11, fontWeight: 800, color: "#fff", flexShrink: 0,
                   }}
                 >
-                  {initials}
+                  JS
                 </div>
-                {!isMobile && <span style={{ fontWeight: 600, fontSize: 13, color: t.textPrim }}>{displayName.split(' ')[0]}</span>}
+                <span style={{ fontWeight: 600, fontSize: 13, color: t.textPrim }}>User</span>
                 <IconChevronDown open={dropdownOpen} />
               </button>
 
@@ -380,8 +373,8 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                 >
                   {/* Header */}
                   <div style={{ padding: "16px", borderBottom: `1px solid ${t.border}` }}>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>{email}</div>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim }}>John Santos</div>
+                    <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>john@aranova.ph</div>
                   </div>
 
                   <div style={{ padding: 8 }}>
@@ -427,10 +420,10 @@ const UserLayout: React.FC<UserLayoutProps> = ({
           </div>
         </header>
 
-        {/* ── BODY FLEX CONTAINER ────────────────────────────────────────── */}
-        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+        {/* ── BODY ───────────────────────────────────────────────────────── */}
+        <div style={{ display: "flex", flex: 1, overflow: "hidden", position: "relative" }}>
 
-          {/* ── DESKTOP SIDEBAR ──────────────────────────────────────────── */}
+          {/* ── DESKTOP SIDEBAR ────────────────────────────────────────────── */}
           {!isMobile && (
             <aside
               style={{
@@ -440,7 +433,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                 display: "flex",
                 flexDirection: "column",
                 flexShrink: 0,
-                transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1)",
+                transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1), background .2s, border .2s",
                 transform: sidebarOpen ? "translateX(0)" : `translateX(-${sidebarW}px)`,
                 marginLeft: sidebarOpen ? 0 : -sidebarW,
               }}
@@ -465,7 +458,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                 ))}
               </div>
 
-              {/* Sidebar footer (Dynamic User Info) */}
+              {/* Sidebar footer */}
               <div style={{ marginTop: "auto", padding: 16, borderTop: `1px solid ${t.border}`, transition: "border .2s" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 4px" }}>
                   <div
@@ -477,11 +470,11 @@ const UserLayout: React.FC<UserLayoutProps> = ({
                       boxShadow: "0 4px 10px rgba(22, 82, 201, 0.3)"
                     }}
                   >
-                    {initials}
+                    JS
                   </div>
-                  <div style={{ overflow: "hidden" }}>
-                    <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 500 }}>{roleDisplay}</div>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim }}>John Santos</div>
+                    <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 500 }}>Commuter Plan</div>
                   </div>
                 </div>
               </div>
@@ -493,18 +486,21 @@ const UserLayout: React.FC<UserLayoutProps> = ({
             style={{
               flex: 1,
               overflowY: "auto",
-              padding: isMobile ? "20px 16px 40px" : "32px",
+              padding: isMobile ? "20px 16px" : "32px",
+              paddingBottom: isMobile ? 84 : 40, // Extra padding on mobile so content isn't hidden behind footer
+              transition: "padding .25s",
             }}
           >
             {children}
           </main>
         </div>
 
-        {/* ── MOBILE BOTTOM NAVIGATION (FLEX, NOT FIXED) ────────────────── */}
+        {/* ── MOBILE BOTTOM NAVIGATION ──────────────────────────────────── */}
         {isMobile && (
           <nav
             style={{
-              flexShrink: 0,
+              position: "fixed",
+              bottom: 0, left: 0, right: 0,
               height: 64,
               background: t.bgHeader,
               borderTop: `1px solid ${t.border}`,

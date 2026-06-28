@@ -14,40 +14,20 @@ const IconTrendUp = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill=
 const IconAdd = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>);
 const IconSend = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>);
 const IconPending = () => (<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>);
-const IconExternalLink = () => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginLeft: 4 }}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>);
+
+interface TxItem { id: number; icon: "bus" | "trend" | "lock"; name: string; meta: string; amount: string; positive: boolean; color: "gray" | "green" | "blue"; }
 
 // ---------------------------------------------------------------------------
 // 1. DRIVER DASHBOARD
 // ---------------------------------------------------------------------------
-const DriverContent: React.FC<{ userData: any }> = ({ userData }) => {
+const DriverContent: React.FC = () => {
   const { dark } = useTheme();
-  const [balance, setBalance] = useState("...");
-
   const t = {
     bgCard: dark ? "#1A1D27" : "#ffffff", bgPage: dark ? "#0F1117" : "#F8F9FA",
     border: dark ? "#2A2D3A" : "#E5E7EB", textPrim: dark ? "#F1F5F9" : "#111827",
     textMuted: dark ? "#94A3B8" : "#6B7280", textFaint: dark ? "#475569" : "#9CA3AF",
     blueText: dark ? "#7DB3FF" : "#1652C9", blue50: dark ? "#1A2644" : "#EEF4FF",
   };
-
-  useEffect(() => {
-    if (!userData?.publicKey) {
-      setBalance("0.00");
-      return;
-    }
-    // Live query to Horizon Testnet API
-    fetch(`https://horizon-testnet.stellar.org/accounts/${userData.publicKey}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.balances) {
-          const xlm = data.balances.find((b: any) => b.asset_type === 'native');
-          setBalance(xlm ? parseFloat(xlm.balance).toFixed(2) : "0.00");
-        } else {
-          setBalance("0.00");
-        }
-      })
-      .catch(() => setBalance("0.00"));
-  }, [userData]);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -60,17 +40,13 @@ const DriverContent: React.FC<{ userData: any }> = ({ userData }) => {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }} className="dash-grid">
         <div className="dash-col-main" style={{ gridColumn: "1 / 3", display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: "linear-gradient(135deg, #1652C9 0%, #0A1931 100%)", borderRadius: 24, padding: 28, color: "#fff", position: "relative", overflow: "hidden" }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.65)", marginBottom: 6 }}>Available Balance</p>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.65)", marginBottom: 6 }}>Available to Spend</p>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4, margin: "6px 0" }}>
-              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>{balance}</span>
-              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.55)", marginLeft: 4 }}>XLM</span>
+              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>42.50</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.55)", marginLeft: 4 }}>USDC</span>
             </div>
             <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
-              <button
-                onClick={() => window.open('https://laboratory.stellar.org/#account-creator?network=test', '_blank')}
-                style={{ flex: 1, background: "#fff", color: "#1652C9", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                <IconAdd /> Fund via Stellar Lab <IconExternalLink />
-              </button>
+              <button style={{ flex: 1, background: "#fff", color: "#1652C9", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconAdd /> Add Funds</button>
               <button style={{ flex: 1, background: "rgba(255,255,255,.1)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 14, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconSend /> Send / Settle</button>
             </div>
           </div>
@@ -96,7 +72,7 @@ const DriverContent: React.FC<{ userData: any }> = ({ userData }) => {
               </div>
               <span style={{ fontSize: 38, fontWeight: 900, color: t.blueText }}>720</span>
             </div>
-            <div style={{ background: t.bgPage, borderRadius: 10, padding: "10px 12px", fontSize: 12, color: t.textMuted, lineHeight: 1.5 }}>You qualify for an automated <strong style={{ color: t.textPrim }}>50 XLM</strong> fuel loan based on your collateral.</div>
+            <div style={{ background: t.bgPage, borderRadius: 10, padding: "10px 12px", fontSize: 12, color: t.textMuted, lineHeight: 1.5 }}>You qualify for an automated <strong style={{ color: t.textPrim }}>50 USDC</strong> fuel loan based on your collateral.</div>
           </div>
           <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, padding: 20, flex: 1 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -113,50 +89,25 @@ const DriverContent: React.FC<{ userData: any }> = ({ userData }) => {
 // ---------------------------------------------------------------------------
 // 2. COMMUTER DASHBOARD
 // ---------------------------------------------------------------------------
-const CommuterContent: React.FC<{ userData: any }> = ({ userData }) => {
+const CommuterContent: React.FC = () => {
   const { dark } = useTheme();
-  const [balance, setBalance] = useState("...");
-
   const t = {
     bgCard: dark ? "#1A1D27" : "#ffffff", border: dark ? "#2A2D3A" : "#E5E7EB",
     textPrim: dark ? "#F1F5F9" : "#111827", textMuted: dark ? "#94A3B8" : "#6B7280"
   };
-
-  useEffect(() => {
-    if (!userData?.publicKey) {
-      setBalance("0.00");
-      return;
-    }
-    // Live query to Horizon Testnet API
-    fetch(`https://horizon-testnet.stellar.org/accounts/${userData.publicKey}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.balances) {
-          const xlm = data.balances.find((b: any) => b.asset_type === 'native');
-          setBalance(xlm ? parseFloat(xlm.balance).toFixed(2) : "0.00");
-        } else {
-          setBalance("0.00");
-        }
-      })
-      .catch(() => setBalance("0.00"));
-  }, [userData]);
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }} className="dash-grid">
         <div className="dash-col-main" style={{ gridColumn: "1 / 3", display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: "linear-gradient(135deg, #10B981 0%, #064E3B 100%)", borderRadius: 24, padding: 28, color: "#fff", position: "relative", overflow: "hidden" }}>
-            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.8)", marginBottom: 6 }}>Live Wallet Balance</p>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.8)", marginBottom: 6 }}>Wallet Balance</p>
             <div style={{ display: "flex", alignItems: "baseline", gap: 4, margin: "6px 0" }}>
-              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>{balance}</span>
-              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.8)", marginLeft: 4 }}>XLM</span>
+              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>18.25</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.8)", marginLeft: 4 }}>USDC</span>
             </div>
             <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
-              <button
-                onClick={() => window.open('https://laboratory.stellar.org/#account-creator?network=test', '_blank')}
-                style={{ flex: 1, background: "#fff", color: "#064E3B", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                <IconAdd /> Fund via Stellar Lab <IconExternalLink />
-              </button>
+              <button style={{ flex: 1, background: "#fff", color: "#064E3B", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconAdd /> Add Funds</button>
               <button style={{ flex: 1, background: "rgba(255,255,255,.15)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 14, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconSend /> Transfer</button>
             </div>
           </div>
@@ -297,30 +248,24 @@ const CooperativeContent: React.FC<{ userData: any }> = ({ userData }) => {
 const UserDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState("wallet");
   const [userData, setUserData] = useState<any>(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+    const fetchStatus = async () => {
+      const user = auth.currentUser;
       if (user) {
         try {
           const userDoc = await getDoc(doc(db, "users", user.uid));
-          if (userDoc.exists()) {
-            setUserData(userDoc.data());
-          }
+          if (userDoc.exists()) setUserData(userDoc.data());
         } catch (error) {
           console.error("Error fetching user status:", error);
         }
-      } else {
-        navigate("/auth");
       }
-      setAuthLoading(false);
-    });
+    };
+    fetchStatus();
+  }, []);
 
-    return () => unsubscribe();
-  }, [navigate]);
-
-  if (authLoading || userData === null) {
+  if (userData === null) {
     return <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: "#F8F9FA", color: "#6B7280", fontFamily: "'Inter', sans-serif" }}>Loading your workspace...</div>;
   }
 
@@ -356,13 +301,13 @@ const UserDashboard: React.FC = () => {
           .dash-col-side { grid-column: 1 !important; }
         }
       `}</style>
-      <UserLayout activeTab={activeTab} onTabChange={setActiveTab} userData={userData}>
-        {userData.role === "commuter" && <CommuterContent userData={userData} />}
-        {userData.role === "driver" && <DriverContent userData={userData} />}
+      <UserLayout activeTab={activeTab} onTabChange={setActiveTab}>
+        {userData.role === "commuter" && <CommuterContent />}
+        {userData.role === "driver" && <DriverContent />}
         {userData.role === "cooperative" && <CooperativeContent userData={userData} />}
 
         {/* Fallback if role is completely missing */}
-        {!["commuter", "driver", "cooperative"].includes(userData.role) && <CommuterContent userData={userData} />}
+        {!["commuter", "driver", "cooperative"].includes(userData.role) && <CommuterContent />}
       </UserLayout>
     </>
   );

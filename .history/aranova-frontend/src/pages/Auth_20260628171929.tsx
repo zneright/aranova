@@ -166,17 +166,14 @@ const AuthPage: React.FC = () => {
     try {
       let walletModule;
 
-      // Using ts-ignore resolves the conflicting parameter types across different
-      // versions of the stellar-wallets-kit modules without breaking compilation
+      // FIX: By using `any` we completely bypass TypeScript conflicts between the 
+      // differing module constructor expectations across the stellar wallets kit package.
       if (walletId === 'freighter') {
-        // @ts-ignore
-        walletModule = new FreighterModule();
+        walletModule = new (FreighterModule as any)();
       } else if (walletId === 'xbull') {
-        // @ts-ignore
-        walletModule = new xBullModule();
+        walletModule = new (xBullModule as any)();
       } else if (walletId === 'lobstr') {
-        // @ts-ignore
-        walletModule = new LobstrModule();
+        walletModule = new (LobstrModule as any)();
       }
 
       if (!walletModule) {
