@@ -1,179 +1,180 @@
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use soroban_sdk::{testutils::Address as _, testutils::Ledger, Address, Env, token};
+#![cfg(test)]
 
-    // Test 1: Complete Happy Path validating Vault Deposits and Auto-Split Multi-User Payments
-    #[test]
-    fn test_vault_and_payment_autosplit_happy_path() {
-        let env = Env::default();
-        env.mock_all_auths();
+use super::*;
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    token, Address, Env,
+};
 
-        let admin = Address::generate(&env);
-        let fee_wallet = Address::generate(&env);
-        let sender = Address::generate(&env);
-        let receiver = Address::generate(&env);
+fn setup_env() -> (Env, AranovaContractClient<'static>, Address, Address, token::Client<'static>, token::StellarAssetClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths(); // Bypass strict signature checks for unit testing
 
-        let token_admin = Address::generate(&env);
-        let token_contract = env.register_stellar_asset_contract(token_admin.clone());
-        let token_client = token::Client::new(&env, &token_contract);
-        let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
-        
-        let contract_id = env.register_contract(None, AranovaContract);
-        let client = AranovaContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    
+    // Register the smart contract
+    let contract_id = env.register_contract(None, AranovaContract);
+    let contract = AranovaContractClient::new(&env, &contract_id);
+    
+    // Register a native-like test token
+    let token_id = env.register_stellar_asset_contract(token_admin.clone());
+    let token = token::Client::new(&env, &token_id);
+    let token_asset = token::StellarAssetClient::new(&env, &token_id);
 
-        client.initialize(&admin, &fee_wallet);
-        token_admin_client.mint(&sender, &1000);
+    contract.initialize(&admin);
 
-        client.set_user_automation(&receiver, &2000, &false);
-        client.process_payment(&sender, &receiver, &token_contract, &500);
+    (env, contract, admin, token_id, token, token_asset)
+}
 
-        assert_eq!(token_client.balance(&receiver), 400);
-        assert_eq!(token_client.balance(&contract_id), 100);
-    }
+#[test]
+fn test_initialization_and_pay_receive() {
+    let (env, contract, _admin, token_id, token, token_asset) = setup_env();
+    
+    let commuter = Address::generate(&env);
+    let driver = Address::generate(&env);
 
-    // Test 2: Core Lending and Debt Clear Mechanism
-    #[test]
-    fn test_universal_lending_and_vault_liquidation() {
-        let env = Env::default();
-        env.mock_all_auths();
+    // Mint 1000 tokens to the commuter
+    token_asset.mint(&commuter, &1000);
 
-        let admin = Address::generate(&env);
-        let fee_wallet = Address::generate(&env);
-        let borrower = Address::generate(&env);
-        let pool_provider = Address::generate(&env);
+    // Commuter pays driver 100 tokens
+    contract.process_payment(&commuter, &driver, &token_id, &100);
 
-        let token_admin = Address::generate(&env);
-        let token_contract = env.register_stellar_asset_contract(token_admin.clone());
-        let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
-        
-        let contract_id = env.register_contract(None, AranovaContract);
-        let client = AranovaContractClient::new(&env, &contract_id);
+    // Verify Balances (No vault active yet)
+    assert_eq!(token.balance(&commuter), 900);
+    assert_eq!(token.balance(&driver), 100);
 
-        client.initialize(&admin, &fee_wallet);
-        token_admin_client.mint(&pool_provider, &10000);
-        token_admin_client.mint(&borrower, &5000);
+    // Verify Trust Scores increased by +1
+    assert_eq!(contract.get_user_score(&commuter), 701);
+    assert_eq!(contract.get_user_score(&driver), 701);
+}
 
-        // Uses universal deposit function (100% goes to pool since no contingency config is set)
-        client.deposit_funds(&pool_provider, &token_contract, &5000);
-        client.lock_in_vault(&borrower, &token_contract, &2000, &30);
+#[test]
+fn test_vault_auto_save_and_withdraw() {
+    let (env, contract, _admin, token_id, token, token_asset) = setup_env();
+    
+    let commuter = Address::generate(&env);
+    let driver = Address::generate(&env);
+    token_asset.mint(&commuter, &1000);
 
-        client.issue_universal_loan(&admin, &borrower, &token_contract, &1000);
+    // Driver turns on the vault: 10% auto-save (1000 BPS), 30 day lock
+    contract.configure_vault(&driver, &true, &1000, &30);
 
-        let active_loan: LoanRecord = client.get_active_loan(&borrower);
-        assert_eq!(active_loan.balance, 1000);
+    // Commuter pays driver 100 tokens
+    contract.process_payment(&commuter, &driver, &token_id, &100);
 
-        client.settle_debt_from_vault(&borrower, &token_contract);
+    // Driver should get 90 to wallet, 10 to vault
+    assert_eq!(token.balance(&driver), 90);
+    
+    let vault = contract.get_vault(&driver);
+    assert_eq!(vault.balance, 10);
+    assert!(vault.unlock_time > env.ledger().timestamp());
 
-        let cleared_loan: LoanRecord = client.get_active_loan(&borrower);
-        assert_eq!(cleared_loan.balance, 0);
-    }
+    // Advance ledger time by 31 days (31 * 86400 seconds)
+    env.ledger().with_mut(|li| li.timestamp += 31 * 86400);
 
-    // Test 3: New Feature - Opt-in Contingency Vault, Split Routing & Maturity Withdrawal
-    #[test]
-    fn test_contingency_vault_opt_in_and_telegraphy() {
-        let env = Env::default();
-        env.mock_all_auths();
+    // Driver withdraws the 10 tokens
+    contract.withdraw_from_vault(&driver, &token_id, &10);
+    
+    // Total wallet balance should now be 100
+    assert_eq!(token.balance(&driver), 100);
+}
 
-        let admin = Address::generate(&env);
-        let fee_wallet = Address::generate(&env);
-        let user = Address::generate(&env);
-        
-        let token_admin = Address::generate(&env);
-        let token_contract = env.register_stellar_asset_contract(token_admin.clone());
-        let token_client = token::Client::new(&env, &token_contract);
-        let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
+#[test]
+#[should_panic(expected = "Vault is still time-locked!")]
+fn test_vault_early_withdraw_panics() {
+    let (env, contract, _admin, token_id, _, token_asset) = setup_env();
+    let driver = Address::generate(&env);
+    token_asset.mint(&driver, &1000);
 
-        let contract_id = env.register_contract(None, AranovaContract);
-        let client = AranovaContractClient::new(&env, &contract_id);
+    contract.configure_vault(&driver, &true, &0, &30);
+    contract.lock_in_vault(&driver, &token_id, &500);
 
-        client.initialize(&admin, &fee_wallet);
-        token_admin_client.mint(&user, &10000);
+    // Trying to withdraw immediately should trigger a panic
+    contract.withdraw_from_vault(&driver, &token_id, &100);
+}
 
-        // 1. User configures contingency: 10% (1000 BPS) with a 30-day maturity
-        client.configure_contingency(&user, &true, &1000, &30);
+#[test]
+fn test_fuel_credit_good_payer() {
+    let (env, contract, admin, token_id, token, token_asset) = setup_env();
+    
+    let coop = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let pump = Address::generate(&env);
 
-        // 2. User deposits 5000 tokens
-        client.deposit_funds(&user, &token_contract, &5000);
+    // Give the Coop and Driver some money
+    token_asset.mint(&coop, &5000);
+    token_asset.mint(&driver, &1000); // Driver needs money to pay the fee
 
-        // 3. Verify the routing split: 500 (10%) to contingency vault
-        let c_vault = client.get_contingency_vault(&user);
-        assert_eq!(c_vault.balance, 500);
+    // Coop sets limit
+    contract.set_driver_limit(&coop, &driver, &1000);
 
-        // 4. Fast forward time by 31 days to simulate maturity
-        let current_time = env.ledger().timestamp();
-        env.ledger().set_timestamp(current_time + (31 * 86400));
+    // Driver requests 1000 XLM for fuel
+    contract.issue_fuel_credit(&driver, &coop, &pump, &token_id, &1000);
 
-        // 5. User claims their matured contingency vault funds
-        client.withdraw_contingency(&user, &token_contract, &500);
+    // Check pump received funds directly from Coop
+    assert_eq!(token.balance(&pump), 1000);
+    assert_eq!(token.balance(&coop), 4000);
 
-        // 6. Verify funds are returned to user's wallet
-        let remaining_vault = client.get_contingency_vault(&user);
-        assert_eq!(remaining_vault.balance, 0);
-        // Balance = 5000 (kept initially) + 500 (withdrawn) = 5500
-        assert_eq!(token_client.balance(&user), 5500); 
-    }
+    // Driver repays immediately (Good Payer)
+    contract.repay_fuel_credit(&driver, &token_id);
 
-    // Test 4: Enforcing the strict sequential borrowing rule
-    #[test]
-    #[should_panic(expected = "Must settle existing daily fuel loan first")]
-    fn test_sequential_borrowing_limit_rule() {
-        let env = Env::default();
-        env.mock_all_auths();
+    // Math Check:
+    // Admin gets 0.2% of 1000 = 2
+    // Coop gets Principal (1000) + 0.3% (3) = 1003
+    assert_eq!(token.balance(&admin), 2);
+    assert_eq!(token.balance(&coop), 5003); // Started with 4000 after loan, +1003
 
-        let admin = Address::generate(&env);
-        let fee_wallet = Address::generate(&env);
-        let driver = Address::generate(&env);
-        let pump = Address::generate(&env);
-        let pool_provider = Address::generate(&env);
-        
-        let token_admin = Address::generate(&env);
-        let token_contract = env.register_stellar_asset_contract(token_admin.clone());
-        let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
+    // Trust Score Check (+5 for paying within 24 hours)
+    assert_eq!(contract.get_user_score(&driver), 705);
+}
 
-        let contract_id = env.register_contract(None, AranovaContract);
-        let client = AranovaContractClient::new(&env, &contract_id);
+#[test]
+fn test_fuel_credit_late_payer() {
+    let (env, contract, _admin, token_id, _, token_asset) = setup_env();
+    
+    let coop = Address::generate(&env);
+    let driver = Address::generate(&env);
+    let pump = Address::generate(&env);
 
-        client.initialize(&admin, &fee_wallet);
-        token_admin_client.mint(&pool_provider, &10000);
-        client.deposit_funds(&pool_provider, &token_contract, &5000);
-        client.set_partner_pump(&admin, &pump, true);
-        client.set_driver_limit(&admin, &driver, 1000);
+    token_asset.mint(&coop, &5000);
+    token_asset.mint(&driver, &2000); 
 
-        client.issue_fuel_credit(&driver, &pump, &token_contract, &200);
-        client.issue_fuel_credit(&driver, &pump, &token_contract, &200);
-    }
+    contract.set_driver_limit(&coop, &driver, &1000);
+    contract.issue_fuel_credit(&driver, &coop, &pump, &token_id, &1000);
 
-    // Test 5: Validation of Administrative Forced Liquidation and Credit Slashes
-    #[test]
-    fn test_forced_liquidation_and_score_penalty() {
-        let env = Env::default();
-        env.mock_all_auths();
+    // Advance time past 24 hours (2 days)
+    env.ledger().with_mut(|li| li.timestamp += 2 * 86400);
 
-        let admin = Address::generate(&env);
-        let fee_wallet = Address::generate(&env);
-        let user = Address::generate(&env);
-        let pool_provider = Address::generate(&env);
-        
-        let token_admin = Address::generate(&env);
-        let token_contract = env.register_stellar_asset_contract(token_admin.clone());
-        let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
+    // Driver repays late
+    contract.repay_fuel_credit(&driver, &token_id);
 
-        let contract_id = env.register_contract(None, AranovaContract);
-        let client = AranovaContractClient::new(&env, &contract_id);
+    // Trust Score Check (-20 penalty)
+    assert_eq!(contract.get_user_score(&driver), 680);
+}
 
-        client.initialize(&admin, &fee_wallet);
-        token_admin_client.mint(&pool_provider, &10000);
-        token_admin_client.mint(&user, &5000);
+#[test]
+#[should_panic(expected = "Requested amount exceeds Trust Score constraints")]
+fn test_admin_loan_trust_limit() {
+    let (env, contract, admin, token_id, _, token_asset) = setup_env();
+    
+    let commuter = Address::generate(&env);
+    token_asset.mint(&admin, &100000);
 
-        client.deposit_funds(&pool_provider, &token_contract, &5000);
-        client.lock_in_vault(&user, &token_contract, &2000, &30);
+    // Commuter starts with 700 score. Max loan = 700 * 2 = 1400.
+    // Trying to borrow 5000 should panic.
+    contract.issue_admin_loan(&admin, &commuter, &token_id, &5000, &100);
+}
 
-        client.issue_universal_loan(&admin, &user, &token_contract, &500);
-        
-        client.force_liquidate(&admin, &user, &token_contract);
+#[test]
+fn test_admin_loan_success() {
+    let (env, contract, admin, token_id, token, token_asset) = setup_env();
+    
+    let commuter = Address::generate(&env);
+    token_asset.mint(&admin, &100000);
 
-        let active_loan: LoanRecord = client.get_active_loan(&user);
-        assert_eq!(active_loan.balance, 0);
-    }
+    // Commuter starts with 700 score. Max loan = 1400. Borrowing 1000 works.
+    contract.issue_admin_loan(&admin, &commuter, &token_id, &1000, &100);
+
+    assert_eq!(token.balance(&commuter), 1000);
 }

@@ -1,433 +1,287 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env};
+
+const BPS_DIVIDER: i128 = 10000;
+const DAY_IN_SECONDS: u64 = 86400;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VaultData {
-    pub balance: i128,
-    pub unlock_time: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LoanRecord {
-    pub balance: i128,
-    pub is_admin: bool,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct UserConfig {
-    pub auto_save_bps: i128,    // Percentage of daily earnings to auto-route to Vault
-    pub auto_pay_enabled: bool, // Permission for administrative bots to trigger automated vault clearance
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContingencyConfig {
+pub struct VaultConfig {
     pub is_active: bool,
-    pub bps_split: i128,      // Percentage to route to contingency (e.g., 500 = 5%)
-    pub duration_days: u64,   // Days until maturity
+    pub auto_save_bps: i128, // e.g., 500 = 5%
+    pub duration_days: u64,
+    pub balance: i128,
+    pub unlock_time: u64,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContingencyVaultData {
-    pub balance: i128,
-    pub unlock_time: u64,
+pub struct FuelLoan {
+    pub principal: i128,
+    pub timestamp: u64,
+    pub coop_wallet: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminLoan {
+    pub principal: i128,
+    pub interest_bps: i128,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
-    Admin,
-    FeeWallet,
-    CoopPool,             
-    ActiveLoan(Address),  
-    UserScore(Address),   
-    PartnerPump(Address), 
-    UserVault(Address),   
-    UserPrefs(Address),   
-    DriverLimit(Address),
-    ContingencyPrefs(Address), // Stores User's ContingencyConfig
-    UserContingency(Address),  // Stores User's ContingencyVaultData
+    AdminWallet,
+    CoopLimit(Address),       // Limit set by Coop for a specific driver
+    UserScore(Address),       // The all-important Trust Score (Default starts at 700)
+    ActiveFuelLoan(Address),  // Driver's active fuel credit
+    ActiveAdminLoan(Address), // User's active admin loan
+    UserVault(Address),       // User's optional vault settings and balance
+    LastRewardDay(Address),   // Tracks the day index to enforce "once per day" score boosts
 }
-
-const BPS_DIVIDER: i128 = 10000;
 
 #[contract]
 pub struct AranovaContract;
 
 #[contractimpl]
 impl AranovaContract {
-    /// Initializes the smart contract state with primary global roles and system wallets.
-    pub fn initialize(env: Env, admin: Address, fee_wallet: Address) {
-        if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+    /// Initializes the smart contract state with the supreme admin wallet.
+    pub fn initialize(env: Env, admin_wallet: Address) {
+        if env.storage().instance().has(&DataKey::AdminWallet) {
+            panic!("Already initialized");
         }
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::FeeWallet, &fee_wallet);
-        env.storage().instance().set(&DataKey::CoopPool, &0_i128);
+        env.storage().instance().set(&DataKey::AdminWallet, &admin_wallet);
     }
 
-    /// Whitelists or deregisters a partner gas station pump asset receiver.
-    pub fn set_partner_pump(env: Env, admin: Address, pump: Address, status: bool) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic!("Unauthorized"); }
-        env.storage().instance().set(&DataKey::PartnerPump(pump), &status);
-    }
+    // ==========================================
+    // 1. UNIVERSAL PAY & RECEIVE (ALL USERS)
+    // ==========================================
 
-    /// Allows any user to opt-in, adjust their contingency split, and set a maturity date.
-    pub fn configure_contingency(env: Env, user: Address, is_active: bool, bps_split: i128, duration_days: u64) {
-        user.require_auth();
-        if bps_split < 0 || bps_split > 10000 {
-            panic!("Percentage must be between 0 and 10000 basis points");
-        }
-
-        let config = ContingencyConfig { is_active, bps_split, duration_days };
-        env.storage().instance().set(&DataKey::ContingencyPrefs(user.clone()), &config);
-
-        // TELEGRAPHY LOG: Broadcasts configuration changes to the network
-        env.events().publish(
-            (symbol_short!("TLGRPH"), symbol_short!("CfgCtgcy"), user.clone()), 
-            (is_active, bps_split, duration_days)
-        );
-    }
-
-    /// Universal deposit function. Reads the user's contingency settings to determine dynamic splits.
-    pub fn deposit_funds(env: Env, user: Address, token_addr: Address, amount: i128) {
-        user.require_auth();
-        let client = token::Client::new(&env, &token_addr);
-        client.transfer(&user, &env.current_contract_address(), &amount);
-
-        let prefs: ContingencyConfig = env.storage().instance().get(&DataKey::ContingencyPrefs(user.clone()))
-            .unwrap_or(ContingencyConfig { is_active: false, bps_split: 0, duration_days: 0 });
-
-        let mut contingency_share = 0;
-        let mut pool_share = amount;
-
-        if prefs.is_active && prefs.bps_split > 0 {
-            contingency_share = (amount * prefs.bps_split) / BPS_DIVIDER;
-            pool_share = amount - contingency_share;
-
-            let mut c_vault: ContingencyVaultData = env.storage().instance().get(&DataKey::UserContingency(user.clone()))
-                .unwrap_or(ContingencyVaultData { balance: 0, unlock_time: 0 });
-            
-            c_vault.balance += contingency_share;
-            
-            // Set or extend the maturity date based on the user's configured duration
-            if c_vault.unlock_time <= env.ledger().timestamp() {
-                c_vault.unlock_time = env.ledger().timestamp() + (prefs.duration_days * 86400);
-            }
-            
-            env.storage().instance().set(&DataKey::UserContingency(user.clone()), &c_vault);
-        }
-
-        if pool_share > 0 {
-            let current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-            env.storage().instance().set(&DataKey::CoopPool, &(current_pool + pool_share));
-        }
-
-        // TELEGRAPHY LOG: Broadcasts exact routing allocations
-        env.events().publish(
-            (symbol_short!("TLGRPH"), symbol_short!("Deposit"), user.clone()), 
-            (pool_share, contingency_share)
-        );
-    }
-
-    /// Allows users to withdraw funds from their contingency vault if the maturity date has passed.
-    pub fn withdraw_contingency(env: Env, user: Address, token_addr: Address, amount: i128) {
-        user.require_auth();
-        let mut vault: ContingencyVaultData = env.storage().instance().get(&DataKey::UserContingency(user.clone()))
-            .unwrap_or(ContingencyVaultData { balance: 0, unlock_time: 0 });
-
-        if env.ledger().timestamp() < vault.unlock_time {
-            panic!("Contingency vault is still time-locked");
-        }
-        if amount > vault.balance {
-            panic!("Insufficient unlocked contingency balance");
-        }
-
-        vault.balance -= amount;
-        env.storage().instance().set(&DataKey::UserContingency(user.clone()), &vault);
-
-        let client = token::Client::new(&env, &token_addr);
-        client.transfer(&env.current_contract_address(), &user, &amount);
-
-        // TELEGRAPHY LOG: Broadcasts maturity claim
-        env.events().publish(
-            (symbol_short!("TLGRPH"), symbol_short!("Withdraw"), user.clone()), 
-            amount
-        );
-    }
-
-    /// Allows drivers, passengers, or cooperatives to configure automated settings for daily saving and clearing debt.
-    pub fn set_user_automation(env: Env, user: Address, auto_save_bps: i128, auto_pay_enabled: bool) {
-        user.require_auth();
-        if auto_save_bps < 0 || auto_save_bps > 5000 {
-            panic!("Max auto-save safety threshold capped at 50%");
-        }
-        let config = UserConfig { auto_save_bps, auto_pay_enabled };
-        env.storage().instance().set(&DataKey::UserPrefs(user), &config);
-    }
-
-    /// Sets the maximum credit line ceiling allowed by the Cooperative administration for a given driver.
-    pub fn set_driver_limit(env: Env, admin: Address, driver: Address, limit_amount: i128) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic!("Unauthorized"); }
-        env.storage().instance().set(&DataKey::DriverLimit(driver), &limit_amount);
-    }
-
-    /// Manually deposits capital into a user's local short-term savings vault.
-    pub fn lock_in_vault(env: Env, user: Address, token_addr: Address, amount: i128, duration_days: u64) {
-        user.require_auth();
-        if duration_days != 7 && duration_days != 30 {
-            panic!("Vault locks must be exactly 7 or 30 days");
-        }
-
-        let client = token::Client::new(&env, &token_addr);
-        client.transfer(&user, &env.current_contract_address(), &amount);
-
-        let unlock_time = env.ledger().timestamp() + (duration_days * 86400);
-        let mut vault: VaultData = env.storage().instance().get(&DataKey::UserVault(user.clone()))
-            .unwrap_or(VaultData { balance: 0, unlock_time: 0 });
-        
-        vault.balance += amount;
-        vault.unlock_time = unlock_time; 
-        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
-
-        let score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(0);
-        let boost = (amount / 10) + (if duration_days == 30 { 10 } else { 2 });
-        env.storage().instance().set(&DataKey::UserScore(user.clone()), &(score + boost));
-    }
-
-    /// Processes economic payments between system identities, executing automated programmatic vault allocations.
+    /// Universal Pay & Receive for ALL users. Handles auto-vault routing and trust score bumps.
     pub fn process_payment(env: Env, sender: Address, receiver: Address, token_addr: Address, amount: i128) {
-        sender.require_auth(); 
+        sender.require_auth();
         let client = token::Client::new(&env, &token_addr);
 
-        let receiver_prefs = env.storage().instance().get(&DataKey::UserPrefs(receiver.clone()))
-            .unwrap_or(UserConfig { auto_save_bps: 0, auto_pay_enabled: false });
-        
+        // Check if the receiver has an active vault setup
+        let vault: VaultConfig = env.storage().instance().get(&DataKey::UserVault(receiver.clone()))
+            .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 0, balance: 0, unlock_time: 0 });
+
         let mut receiver_takehome = amount;
+        let mut vault_save_amount = 0;
 
-        if receiver_prefs.auto_save_bps > 0 {
-            let auto_save_amount = (amount * receiver_prefs.auto_save_bps) / BPS_DIVIDER;
-            receiver_takehome = amount - auto_save_amount;
+        // If receiver's vault is ON, slice off the percentage automatically
+        if vault.is_active && vault.auto_save_bps > 0 {
+            vault_save_amount = (amount * vault.auto_save_bps) / BPS_DIVIDER;
+            receiver_takehome = amount - vault_save_amount;
 
-            client.transfer(&sender, &env.current_contract_address(), &auto_save_amount);
+            // Route the saved portion into the contract's vault custody
+            client.transfer(&sender, &env.current_contract_address(), &vault_save_amount);
 
-            let mut vault: VaultData = env.storage().instance().get(&DataKey::UserVault(receiver.clone()))
-                .unwrap_or(VaultData { balance: 0, unlock_time: 0 });
+            let mut updated_vault = vault.clone();
+            updated_vault.balance += vault_save_amount;
             
-            vault.balance += auto_save_amount;
-            if vault.unlock_time == 0 {
-                vault.unlock_time = env.ledger().timestamp() + (30 * 86400); 
+            // If the vault doesn't have an active timer, start the clock right now
+            if updated_vault.unlock_time <= env.ledger().timestamp() {
+                updated_vault.unlock_time = env.ledger().timestamp() + (updated_vault.duration_days * DAY_IN_SECONDS);
             }
-            env.storage().instance().set(&DataKey::UserVault(receiver.clone()), &vault);
+            env.storage().instance().set(&DataKey::UserVault(receiver.clone()), &updated_vault);
         }
 
+        // Send the remaining take-home fare directly to the receiver's main wallet
         if receiver_takehome > 0 {
             client.transfer(&sender, &receiver, &receiver_takehome);
         }
 
-        let s_score: i128 = env.storage().instance().get(&DataKey::UserScore(sender.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::UserScore(sender.clone()), &(s_score + 1));
+        // ECOSYSTEM REWARD: Both the sender and receiver get a +1 Trust Score bump for transacting
+        let s_score: i128 = env.storage().instance().get(&DataKey::UserScore(sender.clone())).unwrap_or(700);
+        env.storage().instance().set(&DataKey::UserScore(sender), &(s_score + 1));
 
-        let r_score: i128 = env.storage().instance().get(&DataKey::UserScore(receiver.clone())).unwrap_or(0);
+        let r_score: i128 = env.storage().instance().get(&DataKey::UserScore(receiver.clone())).unwrap_or(700);
         env.storage().instance().set(&DataKey::UserScore(receiver.clone()), &(r_score + 1));
     }
 
-    /// Allows high-score Drivers to tap micro-loans routed directly to a whitelisted pump.
-    pub fn issue_fuel_credit(env: Env, driver: Address, pump_wallet: Address, token_addr: Address, amount: i128) {
-        driver.require_auth();
+    // ==========================================
+    // 2. VAULT LOGIC (ALL USERS)
+    // ==========================================
 
-        let is_partner = env.storage().instance().get(&DataKey::PartnerPump(pump_wallet.clone())).unwrap_or(false);
-        if !is_partner { panic!("Pump target not whitelisted"); }
-
-        let active_loan: LoanRecord = env.storage().instance().get(&DataKey::ActiveLoan(driver.clone()))
-            .unwrap_or(LoanRecord { balance: 0, is_admin: false });
-        if active_loan.balance > 0 { panic!("Must settle existing daily fuel loan first"); }
-
-        let driver_limit = env.storage().instance().get(&DataKey::DriverLimit(driver.clone())).unwrap_or(0);
-        if amount > driver_limit { panic!("Exceeds cooperative assigned credit limit"); }
-
-        let mut current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-        if current_pool < amount { panic!("Liquidity pool exhausted"); }
-
-        current_pool -= amount;
-        env.storage().instance().set(&DataKey::CoopPool, &current_pool);
-        
-        env.storage().instance().set(&DataKey::ActiveLoan(driver.clone()), &LoanRecord { balance: amount, is_admin: false });
-
-        let client = token::Client::new(&env, &token_addr);
-        client.transfer(&env.current_contract_address(), &pump_wallet, &amount);
-    }
-
-    /// Universal administrative lending facility supporting based on trust index.
-    pub fn issue_universal_loan(env: Env, admin: Address, borrower: Address, token_addr: Address, amount: i128) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic!("Unauthorized"); }
-
-        let score: i128 = env.storage().instance().get(&DataKey::UserScore(borrower.clone())).unwrap_or(0);
-        if score < 10 { panic!("Borrower credit score fails safety margin"); }
-
-        let mut current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-        if current_pool < amount { panic!("Insufficient pool allocation"); }
-
-        current_pool -= amount;
-        env.storage().instance().set(&DataKey::CoopPool, &current_pool);
-
-        let active_loan: LoanRecord = env.storage().instance().get(&DataKey::ActiveLoan(borrower.clone()))
-            .unwrap_or(LoanRecord { balance: 0, is_admin: false });
-        
-        env.storage().instance().set(&DataKey::ActiveLoan(borrower.clone()), &LoanRecord {
-            balance: active_loan.balance + amount,
-            is_admin: true
-        });
-        
-        let client = token::Client::new(&env, &token_addr);
-        client.transfer(&env.current_contract_address(), &borrower, &amount);
-    }
-
-    /// Standard user-authorized macro execution to resolve obligations.
-    pub fn settle_debt_from_vault(env: Env, user: Address, token_addr: Address) {
+    /// Users opt-in to the vault, setting their deduction percentage and lock time.
+    pub fn configure_vault(env: Env, user: Address, is_active: bool, auto_save_bps: i128, duration_days: u64) {
         user.require_auth();
-        let active_loan: LoanRecord = env.storage().instance().get(&DataKey::ActiveLoan(user.clone()))
-            .unwrap_or(LoanRecord { balance: 0, is_admin: false });
-        if active_loan.balance == 0 { panic!("No outstanding debt found"); }
-
-        let mut vault: VaultData = env.storage().instance().get(&DataKey::UserVault(user.clone()))
-            .unwrap_or(VaultData { balance: 0, unlock_time: 0 });
+        let mut vault: VaultConfig = env.storage().instance().get(&DataKey::UserVault(user.clone()))
+            .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 0, balance: 0, unlock_time: 0 });
         
-        let mut superadmin_fee = (active_loan.balance * 20) / BPS_DIVIDER; 
-        let pool_yield_fee = (active_loan.balance * 30) / BPS_DIVIDER;      
-
-        if active_loan.is_admin {
-            superadmin_fee += (active_loan.balance * 100) / BPS_DIVIDER;
-        }
-
-        let total_deduction = active_loan.balance + superadmin_fee + pool_yield_fee;
-        if vault.balance < total_deduction { panic!("Insufficient vault funds to clear obligation"); }
-
-        vault.balance -= total_deduction;
-        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
-        env.storage().instance().set(&DataKey::ActiveLoan(user.clone()), &LoanRecord { balance: 0, is_admin: false });
-
-        let client = token::Client::new(&env, &token_addr);
-        if superadmin_fee > 0 {
-            let fee_recipient: Address = env.storage().instance().get(&DataKey::FeeWallet).unwrap();
-            client.transfer(&env.current_contract_address(), &fee_recipient, &superadmin_fee);
-        }
-
-        let current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-        env.storage().instance().set(&DataKey::CoopPool, &(current_pool + active_loan.balance + pool_yield_fee));
-
-        let current_score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::UserScore(user.clone()), &(current_score + 5)); 
+        vault.is_active = is_active;
+        vault.auto_save_bps = auto_save_bps;
+        vault.duration_days = duration_days;
+        env.storage().instance().set(&DataKey::UserVault(user), &vault);
     }
 
-    /// Triggered automatically by programmatic administration agents.
-    pub fn trigger_auto_pay(env: Env, admin: Address, user: Address, token_addr: Address) {
+    /// Direct manual deposit to vault. Massively boosts Trust Score based on Amount + Time.
+    pub fn lock_in_vault(env: Env, user: Address, token_addr: Address, amount: i128) {
+        user.require_auth();
+        let mut vault: VaultConfig = env.storage().instance().get(&DataKey::UserVault(user.clone()))
+            .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 30, balance: 0, unlock_time: 0 });
+        
+        if !vault.is_active { panic!("Vault is not active"); }
+
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(&user, &env.current_contract_address(), &amount);
+
+        vault.balance += amount;
+        
+        // Reset or extend the unlock timer based on user configuration
+        vault.unlock_time = env.ledger().timestamp() + (vault.duration_days * DAY_IN_SECONDS);
+        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
+
+        // Trust Score soars based on XLM locked and duration
+        let score_boost = (amount / 10) * (vault.duration_days as i128);
+        let current_score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(700);
+        env.storage().instance().set(&DataKey::UserScore(user), &(current_score + score_boost));
+    }
+
+    /// Allows ANY user to withdraw their saved funds once the maturity date hits.
+    pub fn withdraw_from_vault(env: Env, user: Address, token_addr: Address, amount: i128) {
+        user.require_auth();
+        
+        let mut vault: VaultConfig = env.storage().instance().get(&DataKey::UserVault(user.clone()))
+            .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 0, balance: 0, unlock_time: 0 });
+
+        if env.ledger().timestamp() < vault.unlock_time {
+            panic!("Vault is still time-locked! Wait for maturity date.");
+        }
+        
+        if amount > vault.balance {
+            panic!("Insufficient unlocked funds in the vault.");
+        }
+
+        vault.balance -= amount;
+        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
+
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(&env.current_contract_address(), &user, &amount);
+    }
+
+    // ==========================================
+    // 3. FUEL CREDIT LOGIC (DRIVER -> COOP)
+    // ==========================================
+
+    /// Coop assigns the ceiling limit for a specific driver.
+    pub fn set_driver_limit(env: Env, coop: Address, driver: Address, limit: i128) {
+        coop.require_auth();
+        env.storage().instance().set(&DataKey::CoopLimit(driver), &limit);
+    }
+
+    /// Automatically deducts from Coop Wallet -> Sends to target pump.
+    pub fn issue_fuel_credit(env: Env, driver: Address, coop_wallet: Address, target_pump: Address, token_addr: Address, amount: i128) {
+        driver.require_auth(); 
+        
+        // 1. Check Limits & Existing Debt
+        let active_loan: FuelLoan = env.storage().instance().get(&DataKey::ActiveFuelLoan(driver.clone()))
+            .unwrap_or(FuelLoan { principal: 0, timestamp: 0, coop_wallet: coop_wallet.clone() });
+        if active_loan.principal > 0 { panic!("Must settle existing fuel loan first."); }
+
+        let limit: i128 = env.storage().instance().get(&DataKey::CoopLimit(driver.clone())).unwrap_or(0);
+        if amount > limit { panic!("Exceeds Cooperative approved limit."); }
+
+        // 2. Transfer from Coop to Pump (Coop must have granted allowance to contract)
+        let client = token::Client::new(&env, &token_addr);
+        client.transfer(&coop_wallet, &target_pump, &amount);
+
+        // 3. Record the Loan
+        let new_loan = FuelLoan {
+            principal: amount,
+            timestamp: env.ledger().timestamp(),
+            coop_wallet,
+        };
+        env.storage().instance().set(&DataKey::ActiveFuelLoan(driver), &new_loan);
+    }
+
+    /// Driver repays fuel credit directly from their wallet. 
+    /// Math: 0.2% to Admin, 0.3% + Principal to Coop. Applies time-based trust score rules.
+    pub fn repay_fuel_credit(env: Env, driver: Address, token_addr: Address) {
+        driver.require_auth();
+        
+        let loan: FuelLoan = env.storage().instance().get(&DataKey::ActiveFuelLoan(driver.clone())).unwrap();
+        if loan.principal == 0 { panic!("No active fuel credit."); }
+
+        let admin_fee = (loan.principal * 20) / BPS_DIVIDER; // 0.2%
+        let coop_fee = (loan.principal * 30) / BPS_DIVIDER;  // 0.3%
+        let total_deduction = loan.principal + admin_fee + coop_fee;
+
+        let client = token::Client::new(&env, &token_addr);
+        let admin_wallet: Address = env.storage().instance().get(&DataKey::AdminWallet).unwrap();
+
+        // Pull total deduction from Driver
+        client.transfer(&driver, &env.current_contract_address(), &total_deduction);
+        
+        // Route payouts
+        client.transfer(&env.current_contract_address(), &admin_wallet, &admin_fee);
+        client.transfer(&env.current_contract_address(), &loan.coop_wallet, &(loan.principal + coop_fee));
+
+        // Clear active loan
+        env.storage().instance().set(&DataKey::ActiveFuelLoan(driver.clone()), &FuelLoan { principal: 0, timestamp: 0, coop_wallet: loan.coop_wallet });
+
+        // Trust Score Evaluation: Were they fast or late?
+        let current_time = env.ledger().timestamp();
+        let current_day = current_time / DAY_IN_SECONDS;
+        let mut score: i128 = env.storage().instance().get(&DataKey::UserScore(driver.clone())).unwrap_or(700);
+
+        if current_time > loan.timestamp + DAY_IN_SECONDS {
+            // LATE PAYER: Heavy Penalty (-20)
+            score -= 20; 
+        } else {
+            // GOOD PAYER: Assure they only get the boost (+5) once per day max
+            let last_reward_day: u64 = env.storage().instance().get(&DataKey::LastRewardDay(driver.clone())).unwrap_or(0);
+            if current_day > last_reward_day {
+                score += 5; 
+                env.storage().instance().set(&DataKey::LastRewardDay(driver.clone()), &current_day);
+            }
+        }
+        env.storage().instance().set(&DataKey::UserScore(driver), &score);
+    }
+
+    // ==========================================
+    // 4. ADMIN LOANS (BASED STRICTLY ON TRUST SCORE)
+    // ==========================================
+
+    /// Admin approves a loan to ANY user. Max limits and interest bound dynamically by Trust Score.
+    pub fn issue_admin_loan(env: Env, admin: Address, user: Address, token_addr: Address, amount: i128, interest_bps: i128) {
         admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic!("Unauthorized"); }
+        let admin_wallet: Address = env.storage().instance().get(&DataKey::AdminWallet).unwrap();
+        if admin != admin_wallet { panic!("Only Admin Wallet can issue admin loans."); }
 
-        let user_prefs: UserConfig = env.storage().instance().get(&DataKey::UserPrefs(user.clone()))
-            .unwrap_or(UserConfig { auto_save_bps: 0, auto_pay_enabled: false });
-        if !user_prefs.auto_pay_enabled { panic!("User has not enabled auto-pay routines"); }
-
-        let active_loan: LoanRecord = env.storage().instance().get(&DataKey::ActiveLoan(user.clone()))
-            .unwrap_or(LoanRecord { balance: 0, is_admin: false });
-        if active_loan.balance == 0 { panic!("No debt to auto-clear"); }
-
-        let mut vault: VaultData = env.storage().instance().get(&DataKey::UserVault(user.clone()))
-            .unwrap_or(VaultData { balance: 0, unlock_time: 0 });
+        let score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(700);
         
-        let mut superadmin_fee = (active_loan.balance * 20) / BPS_DIVIDER; 
-        let pool_yield_fee = (active_loan.balance * 30) / BPS_DIVIDER;  
+        // Safety constraint: Maximum XLM allowed to borrow is 2x their Trust Score
+        let max_allowed = score * 2; 
+        if amount > max_allowed { panic!("Requested amount exceeds Trust Score constraints."); }
 
-        if active_loan.is_admin {
-            superadmin_fee += (active_loan.balance * 100) / BPS_DIVIDER;
-        }
-
-        let total_deduction = active_loan.balance + superadmin_fee + pool_yield_fee;
-        if vault.balance < total_deduction { panic!("Auto-save balance insufficient for automated settlement"); }
-
-        vault.balance -= total_deduction;
-        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
-        env.storage().instance().set(&DataKey::ActiveLoan(user.clone()), &LoanRecord { balance: 0, is_admin: false });
+        // Dynamic Interest Constraint: High Trust = Protected from high interest
+        if score > 1000 && interest_bps > 500 { panic!("Interest rate too high for premium trust score."); }
 
         let client = token::Client::new(&env, &token_addr);
-        if superadmin_fee > 0 {
-            let fee_recipient: Address = env.storage().instance().get(&DataKey::FeeWallet).unwrap();
-            client.transfer(&env.current_contract_address(), &fee_recipient, &superadmin_fee);
-        }
+        client.transfer(&admin_wallet, &user, &amount);
 
-        let current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-        env.storage().instance().set(&DataKey::CoopPool, &(current_pool + active_loan.balance + pool_yield_fee));
-
-        let current_score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(0);
-        env.storage().instance().set(&DataKey::UserScore(user.clone()), &(current_score + 5)); 
+        env.storage().instance().set(&DataKey::ActiveAdminLoan(user), &AdminLoan { principal: amount, interest_bps });
     }
-
-    /// Admin forced intervention mechanism to claim collateral reserves from defaulting actors.
-    pub fn force_liquidate(env: Env, admin: Address, user: Address, token_addr: Address) {
-        admin.require_auth();
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        if admin != stored_admin { panic!("Unauthorized"); }
-
-        let active_loan: LoanRecord = env.storage().instance().get(&DataKey::ActiveLoan(user.clone()))
-            .unwrap_or(LoanRecord { balance: 0, is_admin: false });
-        if active_loan.balance == 0 { panic!("No defaultable asset layers present"); }
-
-        let mut vault: VaultData = env.storage().instance().get(&DataKey::UserVault(user.clone()))
-            .unwrap_or(VaultData { balance: 0, unlock_time: 0 });
-        
-        let mut superadmin_fee = (active_loan.balance * 20) / BPS_DIVIDER; 
-        let pool_yield_fee = (active_loan.balance * 30) / BPS_DIVIDER;  
-
-        if active_loan.is_admin {
-            superadmin_fee += (active_loan.balance * 100) / BPS_DIVIDER;
-        }
-
-        let total_deduction = active_loan.balance + superadmin_fee + pool_yield_fee;
-        if vault.balance < total_deduction { panic!("System risk event: Under-collateralization breach"); }
-
-        vault.balance -= total_deduction;
-        env.storage().instance().set(&DataKey::UserVault(user.clone()), &vault);
-        env.storage().instance().set(&DataKey::ActiveLoan(user.clone()), &LoanRecord { balance: 0, is_admin: false });
-
-        let client = token::Client::new(&env, &token_addr);
-        if superadmin_fee > 0 {
-            let fee_recipient: Address = env.storage().instance().get(&DataKey::FeeWallet).unwrap();
-            client.transfer(&env.current_contract_address(), &fee_recipient, &superadmin_fee);
-        }
-
-        let current_pool: i128 = env.storage().instance().get(&DataKey::CoopPool).unwrap_or(0);
-        env.storage().instance().set(&DataKey::CoopPool, &(current_pool + active_loan.balance + pool_yield_fee));
-
-        let current_score: i128 = env.storage().instance().get(&DataKey::UserScore(user.clone())).unwrap_or(0);
-        let penalized_score = if current_score > 30 { current_score - 30 } else { 0 };
-        env.storage().instance().set(&DataKey::UserScore(user.clone()), &penalized_score); 
-    }
-
+    
     // ==========================================
     // VIEW FUNCTIONS
     // ==========================================
     
-    pub fn get_active_loan(env: Env, user: Address) -> LoanRecord {
-        env.storage().instance().get(&DataKey::ActiveLoan(user)).unwrap_or(LoanRecord { balance: 0, is_admin: false })
+    pub fn get_user_score(env: Env, user: Address) -> i128 {
+        env.storage().instance().get(&DataKey::UserScore(user)).unwrap_or(700)
     }
 
-    pub fn get_user_vault(env: Env, user: Address) -> VaultData {
-        env.storage().instance().get(&DataKey::UserVault(user)).unwrap_or(VaultData { balance: 0, unlock_time: 0 })
+    pub fn get_vault(env: Env, user: Address) -> VaultConfig {
+        env.storage().instance().get(&DataKey::UserVault(user))
+            .unwrap_or(VaultConfig { is_active: false, auto_save_bps: 0, duration_days: 0, balance: 0, unlock_time: 0 })
     }
 
-    pub fn get_contingency_vault(env: Env, user: Address) -> ContingencyVaultData {
-        env.storage().instance().get(&DataKey::UserContingency(user)).unwrap_or(ContingencyVaultData { balance: 0, unlock_time: 0 })
+    pub fn get_active_fuel_loan(env: Env, driver: Address) -> FuelLoan {
+        let dummy_coop = Address::from_string(&soroban_sdk::String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"));
+        env.storage().instance().get(&DataKey::ActiveFuelLoan(driver))
+            .unwrap_or(FuelLoan { principal: 0, timestamp: 0, coop_wallet: dummy_coop })
     }
 }

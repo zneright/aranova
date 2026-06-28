@@ -24,9 +24,10 @@ soroban contract build
 
 | Field | Value |
 |-------|-------|
-| Contract ID | `CABD7Y45CYNAMJ5UULGMFCEC7C6TM4TUKMA4FV4XDPHN5N4V5W6SIHOT` |
+| Contract ID | `CCT3YGPRWWIEHBVZQLZOIJ5GJX7Z5PYYF6ENCG3EKXCM3M7KX2QWWXJP` |
 | Network | testnet |
-| Explorer | [View on stellar.expert](https://stellar.expert/explorer/testnet/contract/CABD7Y45CYNAMJ5UULGMFCEC7C6TM4TUKMA4FV4XDPHN5N4V5W6SIHOT) |
-| Deploy Tx | [View transaction](https://stellar.expert/explorer/testnet/tx/aed86f63bd6316990ea43ada2389a125d573d3fb8103ce6648db5b5e84453e8b) |
-| Deployed | 2026-06-26 15:11:23 UTC |
+| Explorer | [View on stellar.expert](https://stellar.expert/explorer/testnet/contract/CCT3YGPRWWIEHBVZQLZOIJ5GJX7Z5PYYF6ENCG3EKXCM3M7KX2QWWXJP) |
+| Deploy Tx | [View transaction](https://stellar.expert/explorer/testnet/tx/4af8b0971a219158ae3bee9a2e3e3ec7cbcfafacd4882347c6ed09d70ed81887) |
+| Deployed | 2026-06-28 14:33:32 UTC |
 | Wallet | freighter (`GAGI…SF4G`) |
+
