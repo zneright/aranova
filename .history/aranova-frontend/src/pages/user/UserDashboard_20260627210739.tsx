@@ -1,0 +1,299 @@
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { doc, getDoc, collection, query, where, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
+import { auth, db } from "../../firebase/config";
+import UserLayout, { useTheme } from "../../components/layouT/UserLayout";
+
+// ---------------------------------------------------------------------------
+// SVG Icons (local to dashboard)
+// ---------------------------------------------------------------------------
+const IconScan = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M23 7V1h-6" /><path d="M1 7V1h6" /><path d="M23 17v6h-6" /><path d="M1 17v6h6" /><line x1="9" y1="9" x2="15" y2="9" /><line x1="9" y1="12" x2="15" y2="12" /><line x1="9" y1="15" x2="15" y2="15" /></svg>);
+const IconLock = () => (<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>);
+const IconBus = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" rx="1" /><path d="M16 8h4l3 5v3h-7V8z" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>);
+const IconTrendUp = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18" /><polyline points="17 6 23 6 23 12" /></svg>);
+const IconAdd = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>);
+const IconSend = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>);
+const IconPending = () => (<svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></svg>);
+
+interface TxItem { id: number; icon: "bus" | "trend" | "lock"; name: string; meta: string; amount: string; positive: boolean; color: "gray" | "green" | "blue"; }
+
+// ---------------------------------------------------------------------------
+// 1. DRIVER DASHBOARD
+// ---------------------------------------------------------------------------
+const DriverContent: React.FC = () => {
+  const { dark } = useTheme();
+  const t = {
+    bgCard: dark ? "#1A1D27" : "#ffffff", bgPage: dark ? "#0F1117" : "#F8F9FA",
+    border: dark ? "#2A2D3A" : "#E5E7EB", textPrim: dark ? "#F1F5F9" : "#111827",
+    textMuted: dark ? "#94A3B8" : "#6B7280", textFaint: dark ? "#475569" : "#9CA3AF",
+    blueText: dark ? "#7DB3FF" : "#1652C9", blue50: dark ? "#1A2644" : "#EEF4FF",
+  };
+
+  return (
+    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: dark ? "#1A2644" : "#EEF4FF", border: `1px solid ${dark ? "rgba(79,142,247,.3)" : "rgba(22,82,201,.2)"}`, borderRadius: 20, padding: "6px 14px" }}>
+          <span style={{ position: "relative", width: 10, height: 10, borderRadius: "50%", background: t.blueText, display: "inline-block", animation: "mobilispulse 2s infinite" }} />
+          <span style={{ fontSize: 11, fontWeight: 700, color: t.blueText, letterSpacing: ".4px", textTransform: "uppercase" }}>Bluetooth Ready — Offline Mode</span>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }} className="dash-grid">
+        <div className="dash-col-main" style={{ gridColumn: "1 / 3", display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ background: "linear-gradient(135deg, #1652C9 0%, #0A1931 100%)", borderRadius: 24, padding: 28, color: "#fff", position: "relative", overflow: "hidden" }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.65)", marginBottom: 6 }}>Available to Spend</p>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 4, margin: "6px 0" }}>
+              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>42.50</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.55)", marginLeft: 4 }}>USDC</span>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
+              <button style={{ flex: 1, background: "#fff", color: "#1652C9", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconAdd /> Add Funds</button>
+              <button style={{ flex: 1, background: "rgba(255,255,255,.1)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 14, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconSend /> Send / Settle</button>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <div style={{ background: dark ? "#1F1A0A" : "#FFFBEB", border: `1px solid ${dark ? "#78350F" : "#F4D03F"}`, borderRadius: 20, padding: 22, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <div style={{ width: 56, height: 56, borderRadius: "50%", background: dark ? "#292200" : "#FEF9C3", color: dark ? "#FBBF24" : "#92400E", display: "flex", alignItems: "center", justifyContent: "center" }}><IconScan /></div>
+              <span style={{ fontWeight: 800, fontSize: 15, color: t.textPrim }}>Receive Fare</span>
+              <span style={{ fontSize: 11, color: t.textMuted, textAlign: "center" }}>Scan offline payments</span>
+            </div>
+            <div style={{ background: dark ? "#200A0A" : "#FFF5F5", border: `1px solid ${dark ? "#7F1D1D" : "#FECACA"}`, borderRadius: 20, padding: 22, display: "flex", flexDirection: "column", alignItems: "center", gap: 10, cursor: "pointer" }}>
+              <div style={{ width: 56, height: 56, borderRadius: "50%", background: dark ? "#3B0A0A" : "#FEE2E2", color: dark ? "#F87171" : "#991B1B", display: "flex", alignItems: "center", justifyContent: "center" }}><IconLock /></div>
+              <span style={{ fontWeight: 800, fontSize: 15, color: dark ? "#F87171" : "#991B1B" }}>My Vault</span>
+              <span style={{ fontSize: 11, color: t.textMuted, textAlign: "center" }}>Lock & earn</span>
+            </div>
+          </div>
+        </div>
+        <div className="dash-col-side" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderLeft: "4px solid #22C55E", borderRadius: "0 20px 20px 0", padding: 20 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim }}>Trust Score</div>
+                <div style={{ display: "inline-block", marginTop: 4, background: dark ? "#052E16" : "#F0FDF4", color: dark ? "#4ADE80" : "#15803D", fontSize: 10, fontWeight: 800, padding: "3px 8px", borderRadius: 12, letterSpacing: ".4px" }}>EXCELLENT</div>
+              </div>
+              <span style={{ fontSize: 38, fontWeight: 900, color: t.blueText }}>720</span>
+            </div>
+            <div style={{ background: t.bgPage, borderRadius: 10, padding: "10px 12px", fontSize: 12, color: t.textMuted, lineHeight: 1.5 }}>You qualify for an automated <strong style={{ color: t.textPrim }}>50 USDC</strong> fuel loan based on your collateral.</div>
+          </div>
+          <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, padding: 20, flex: 1 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <span style={{ fontWeight: 800, fontSize: 15, color: t.textPrim }}>Recent Fares</span>
+            </div>
+            {/* Dynamic Activity mapped here normally */}
+            <div style={{ textAlign: "center", padding: "20px", color: t.textMuted, fontSize: 13 }}>No recent transactions.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// 2. COMMUTER DASHBOARD
+// ---------------------------------------------------------------------------
+const CommuterContent: React.FC = () => {
+  const { dark } = useTheme();
+  const t = {
+    bgCard: dark ? "#1A1D27" : "#ffffff", border: dark ? "#2A2D3A" : "#E5E7EB",
+    textPrim: dark ? "#F1F5F9" : "#111827", textMuted: dark ? "#94A3B8" : "#6B7280"
+  };
+
+  return (
+    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 20 }} className="dash-grid">
+        <div className="dash-col-main" style={{ gridColumn: "1 / 3", display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ background: "linear-gradient(135deg, #10B981 0%, #064E3B 100%)", borderRadius: 24, padding: 28, color: "#fff", position: "relative", overflow: "hidden" }}>
+            <p style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.8)", marginBottom: 6 }}>Wallet Balance</p>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 4, margin: "6px 0" }}>
+              <span style={{ fontSize: 52, fontWeight: 900, letterSpacing: -2, lineHeight: 1 }}>18.25</span>
+              <span style={{ fontSize: 16, fontWeight: 700, color: "rgba(255,255,255,.8)", marginLeft: 4 }}>USDC</span>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
+              <button style={{ flex: 1, background: "#fff", color: "#064E3B", border: "none", borderRadius: 14, padding: 14, fontWeight: 800, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconAdd /> Add Funds</button>
+              <button style={{ flex: 1, background: "rgba(255,255,255,.15)", color: "#fff", border: "1px solid rgba(255,255,255,.2)", borderRadius: 14, padding: 14, fontWeight: 700, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><IconSend /> Transfer</button>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14 }}>
+            <div style={{ background: dark ? "#1F1A0A" : "#FFFBEB", border: `1px solid ${dark ? "#78350F" : "#F4D03F"}`, borderRadius: 20, padding: 22, display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+              <div>
+                <span style={{ fontWeight: 800, fontSize: 18, color: t.textPrim, display: "block", marginBottom: 4 }}>Scan to Pay Fare</span>
+                <span style={{ fontSize: 13, color: t.textMuted }}>Tap your phone or scan driver's QR</span>
+              </div>
+              <div style={{ width: 56, height: 56, borderRadius: "50%", background: dark ? "#292200" : "#FEF9C3", color: dark ? "#FBBF24" : "#92400E", display: "flex", alignItems: "center", justifyContent: "center" }}><IconScan /></div>
+            </div>
+          </div>
+        </div>
+        <div className="dash-col-side" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, padding: 20, flex: 1 }}>
+            <span style={{ fontWeight: 800, fontSize: 15, color: t.textPrim, display: "block", marginBottom: 16 }}>Loyalty Points</span>
+            <div style={{ fontSize: 32, fontWeight: 900, color: "#10B981" }}>450 <span style={{ fontSize: 12, color: t.textMuted, fontWeight: 600 }}>PTS</span></div>
+            <p style={{ fontSize: 12, color: t.textMuted, marginTop: 8 }}>Only 50 more points for a free Jeepney ride!</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// 3. COOPERATIVE DASHBOARD (Admin for Drivers)
+// ---------------------------------------------------------------------------
+const CooperativeContent: React.FC<{ userData: any }> = ({ userData }) => {
+  const { dark } = useTheme();
+  const [pendingDrivers, setPendingDrivers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const t = {
+    bgCard: dark ? "#1A1D27" : "#ffffff", border: dark ? "#2A2D3A" : "#E5E7EB",
+    textPrim: dark ? "#F1F5F9" : "#111827", textMuted: dark ? "#94A3B8" : "#6B7280"
+  };
+
+  const fetchDrivers = async () => {
+    try {
+      setLoading(true);
+      const q = query(collection(db, "users"), where("role", "==", "driver"), where("cooperativeId", "==", userData.uid), where("approved", "==", false));
+      const snapshot = await getDocs(q);
+      const drivers: any[] = [];
+      snapshot.forEach(docSnap => drivers.push({ id: docSnap.id, ...docSnap.data() }));
+      setPendingDrivers(drivers);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchDrivers(); }, []);
+
+  const handleApprove = async (id: string) => {
+    await updateDoc(doc(db, "users", id), { approved: true, coopStatus: "approved" });
+    setPendingDrivers(prev => prev.filter(d => d.id !== id));
+  };
+
+  const handleDecline = async (id: string) => {
+    if (!window.confirm("Delete this driver application?")) return;
+    await deleteDoc(doc(db, "users", id));
+    setPendingDrivers(prev => prev.filter(d => d.id !== id));
+  };
+
+  return (
+    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+      <h2 style={{ fontSize: 24, fontWeight: 800, color: t.textPrim, marginBottom: 20 }}>Cooperative Management</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20, marginBottom: 24 }}>
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, padding: 20 }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Total Approved Fleet</p>
+          <p style={{ fontSize: 32, fontWeight: 900, color: t.textPrim, marginTop: 8 }}>42 <span style={{ fontSize: 14 }}>Drivers</span></p>
+        </div>
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderLeft: "4px solid #F59E0B", borderRadius: 20, padding: 20 }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: t.textMuted, textTransform: "uppercase" }}>Pending Applications</p>
+          <p style={{ fontSize: 32, fontWeight: 900, color: "#F59E0B", marginTop: 8 }}>{pendingDrivers.length}</p>
+        </div>
+      </div>
+
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ fontWeight: 800, fontSize: 16, color: t.textPrim }}>Pending Driver Approvals</h3>
+          <button onClick={fetchDrivers} style={{ background: "transparent", border: `1px solid ${t.border}`, color: t.textPrim, padding: "6px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontWeight: 700 }}>Refresh</button>
+        </div>
+
+        {loading ? <p style={{ color: t.textMuted, fontSize: 13 }}>Loading...</p> : pendingDrivers.length === 0 ? <p style={{ color: t.textMuted, fontSize: 13 }}>No pending applications found.</p> : (
+          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${t.border}`, color: t.textMuted, fontSize: 13 }}>
+                <th style={{ padding: "12px 0" }}>Driver Name</th>
+                <th style={{ padding: "12px 0" }}>Vehicle & Plate</th>
+                <th style={{ padding: "12px 0" }}>Phone</th>
+                <th style={{ padding: "12px 0", textAlign: "right" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingDrivers.map(d => (
+                <tr key={d.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                  <td style={{ padding: "12px 0", color: t.textPrim, fontWeight: 600, fontSize: 14 }}>{d.displayName}</td>
+                  <td style={{ padding: "12px 0", color: t.textPrim, fontSize: 14 }}><span style={{ textTransform: "capitalize" }}>{d.vehicleType}</span> • {d.plateNumber}</td>
+                  <td style={{ padding: "12px 0", color: t.textMuted, fontSize: 14 }}>{d.phone}</td>
+                  <td style={{ padding: "12px 0", textAlign: "right" }}>
+                    <button onClick={() => handleApprove(d.id)} style={{ background: "#10B981", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700, marginRight: 8, cursor: "pointer" }}>Approve</button>
+                    <button onClick={() => handleDecline(d.id)} style={{ background: "#EF4444", color: "#fff", border: "none", padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Decline</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// UserDashboard (Entry Point — Wraps with layout and handles intercepts)
+// ---------------------------------------------------------------------------
+const UserDashboard: React.FC = () => {
+  const [activeTab, setActiveTab] = useState("wallet");
+  const [userData, setUserData] = useState<any>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      const user = auth.currentUser;
+      if (user) {
+        try {
+          const userDoc = await getDoc(doc(db, "users", user.uid));
+          if (userDoc.exists()) setUserData(userDoc.data());
+        } catch (error) {
+          console.error("Error fetching user status:", error);
+        }
+      }
+    };
+    fetchStatus();
+  }, []);
+
+  if (userData === null) {
+    return <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: "#F8F9FA", color: "#6B7280", fontFamily: "'Inter', sans-serif" }}>Loading your workspace...</div>;
+  }
+
+  // Intercept the dashboard if the user is flagged as pending
+  if (userData.approved === false) {
+    return (
+      <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: "#F8F9FA", fontFamily: "'Inter', sans-serif", padding: 20 }}>
+        <div style={{ background: "#ffffff", padding: "40px", borderRadius: 24, boxShadow: "0 10px 40px rgba(0,0,0,0.05)", maxWidth: 400, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <div style={{ width: 80, height: 80, background: "#FEF3C7", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20 }}>
+            <IconPending />
+          </div>
+          <h2 style={{ fontSize: 22, fontWeight: 900, color: "#111827", margin: "0 0 10px", letterSpacing: "-0.5px" }}>Verification Pending</h2>
+          <p style={{ fontSize: 14, color: "#6B7280", lineHeight: 1.6, margin: 0 }}>
+            Your account documentation is currently under review. You will be granted access to the dashboard once your cooperative or system administrator approves your application.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // If approved but skipped wallet creation somehow, bounce them back to auth to finish
+  if (userData.approved === true && userData.walletCreated === false) {
+    navigate("/auth");
+    return null;
+  }
+
+  return (
+    <>
+      <style>{`
+        @media (max-width: 700px) {
+          .dash-grid { grid-template-columns: 1fr !important; }
+          .dash-col-main { grid-column: 1 !important; }
+          .dash-col-side { grid-column: 1 !important; }
+        }
+      `}</style>
+      <UserLayout activeTab={activeTab} onTabChange={setActiveTab}>
+        {userData.role === "commuter" && <CommuterContent />}
+        {userData.role === "driver" && <DriverContent />}
+        {userData.role === "cooperative" && <CooperativeContent userData={userData} />}
+
+        {/* Fallback if role is completely missing */}
+        {!["commuter", "driver", "cooperative"].includes(userData.role) && <CommuterContent />}
+      </UserLayout>
+    </>
+  );
+};
+
+export default UserDashboard;

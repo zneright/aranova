@@ -1,0 +1,24 @@
+    setTimeout(() => {
+      setLoading(false);
+
+      if (isLogin) {
+        if (
+          form.email === "admin@mobilis.com" &&
+          form.password === "password123"
+        ) {
+          window.location.href = "/admin";
+          return;
+        } else if (
+          form.email === "user@mobilis.com" &&
+          form.password === "password123"
+        ) {
+          window.location.href = "/user";
+          return;
+        } else {
+          setErrors({
+            email:
+              "Try admin@mobilis.com or user@mobilis.com (pw: password123)",
+          });
+          return;
+        }
+      }
