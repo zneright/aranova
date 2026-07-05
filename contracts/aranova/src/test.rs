@@ -104,3 +104,50 @@ fn repayment_returns_principal_to_pool_and_routes_fees() {
     assert_eq!(fix.contract.get_pool(&fix.coop), 50_000_000);
     assert!(fix.contract.get_loan(&fix.driver).is_none());
 }
+
+#[test]
+fn pay_splits_and_routes_vault_percentage() {
+    let fix = setup();
+    let sender = Address::generate(&fix.token.env);
+    let recipient = Address::generate(&fix.token.env);
+    fix.asset.mint(&sender, &100_000_000);
+
+    // Pay 10 XLM (10,000,000 stroops) with 10% (1000 bps) routed to recipient's vault
+    fix.contract.pay(&sender, &recipient, &fix.token.address, &10_000_000, &1000);
+
+    // Sender balance: 90 XLM
+    assert_eq!(fix.token.balance(&sender), 90_000_000);
+    // Recipient balance: 9 XLM
+    assert_eq!(fix.token.balance(&recipient), 9_000_000);
+    // Recipient vault on-chain: 1 XLM
+    assert_eq!(fix.contract.get_vault(&recipient), 1_000_000);
+    // Contract balance: 1 XLM
+    assert_eq!(fix.token.balance(&fix.contract.address), 1_000_000);
+}
+
+#[test]
+fn lock_vault_deposits_into_vault_directly() {
+    let fix = setup();
+    fix.asset.mint(&fix.driver, &100_000_000);
+
+    fix.contract.lock_vault(&fix.driver, &fix.token.address, &20_000_000);
+
+    assert_eq!(fix.token.balance(&fix.driver), 80_000_000);
+    assert_eq!(fix.contract.get_vault(&fix.driver), 20_000_000);
+    assert_eq!(fix.token.balance(&fix.contract.address), 20_000_000);
+}
+
+#[test]
+fn redeem_vault_releases_locked_funds() {
+    let fix = setup();
+    fix.asset.mint(&fix.driver, &100_000_000);
+
+    fix.contract.lock_vault(&fix.driver, &fix.token.address, &50_000_000);
+    assert_eq!(fix.contract.get_vault(&fix.driver), 50_000_000);
+
+    fix.contract.redeem_vault(&fix.driver, &fix.token.address, &20_000_000);
+
+    assert_eq!(fix.contract.get_vault(&fix.driver), 30_000_000);
+    assert_eq!(fix.token.balance(&fix.driver), 70_000_000);
+    assert_eq!(fix.token.balance(&fix.contract.address), 30_000_000);
+}

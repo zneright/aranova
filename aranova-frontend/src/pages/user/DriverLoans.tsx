@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
-import UserLayout, { useTheme } from "../../components/layout/UserLayout";
+import UserLayout from "../../components/layout/UserLayout";
+import { useTheme } from "../../contexts/ThemeContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import {
   collection,
@@ -75,65 +76,12 @@ const getSigningHandler = async (userData: any, networkPassphrase: string) => {
   }
 };
 
-const StatCard: React.FC<{ title: string; value: string; note?: string; dark: boolean }> = ({
-  title,
-  value,
-  note,
-  dark,
-}) => (
-  <div
-    style={{
-      background: dark ? "#08111f" : "#ffffff",
-      border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-      borderRadius: 18,
-      padding: 16,
-    }}
-  >
-    <div style={{ fontSize: 12, color: dark ? "#94a3b8" : "#64748b", marginBottom: 8 }}>{title}</div>
-    <div style={{ fontSize: 20, fontWeight: 800 }}>{value}</div>
-    {note && <div style={{ marginTop: 6, fontSize: 12, color: dark ? "#64748b" : "#94a3b8" }}>{note}</div>}
-  </div>
-);
-
-const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { dark: boolean; ghost?: boolean }> = ({
-  dark,
-  ghost,
-  style,
-  ...props
-}) => (
-  <button
-    {...props}
-    style={{
-      border: "none",
-      borderRadius: 999,
-      padding: "12px 16px",
-      fontWeight: 800,
-      cursor: props.disabled ? "not-allowed" : "pointer",
-      background: ghost ? (dark ? "#1f2937" : "#e2e8f0") : (dark ? "#10b981" : "#0f766e"),
-      color: ghost ? (dark ? "#f8fafc" : "#111827") : "#ffffff",
-      ...style,
-    }}
-  />
-);
-
-const inputStyle = (dark: boolean) => ({
-  width: "100%",
-  border: `1px solid ${dark ? "#334155" : "#cbd5e1"}`,
-  borderRadius: 14,
-  padding: "12px 14px",
-  fontSize: 14,
-  background: dark ? "#0f172a" : "#fff",
-  color: dark ? "#f8fafc" : "#0f172a",
-  outline: "none",
-  fontFamily: "inherit",
-});
-
 const DriverLoans = () => {
   const { userData, loading: authLoading } = useAuth();
   const { dark } = useTheme();
 
   const [policy, setPolicy] = useState<Policy>(defaultPolicy);
-  const [requestedAmount, setRequestedAmount] = useState("");
+  const [requestedAmount, setRequestedAmount] = useState("0");
   const [activeLoan, setActiveLoan] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
@@ -211,7 +159,7 @@ const DriverLoans = () => {
         createdAt: serverTimestamp(),
       });
       alert("Credit request submitted successfully to cooperative!");
-      setRequestedAmount("");
+      setRequestedAmount("0");
     } finally {
       setBusy(false);
     }
@@ -264,86 +212,158 @@ const DriverLoans = () => {
     }
   };
 
+  const cardStyle = dark ? "bg-[#141620] border-white/5 text-white" : "bg-white border-[#EAE6DF] text-gray-900";
+
   return (
     <UserLayout activeTab="loans" userData={userData}>
-      <div style={{ display: "grid", gap: 16 }}>
-        <h2>Driver Panel - Fuel Credit & Loans</h2>
-
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-          <StatCard
-            dark={dark}
-            title="Trust Score"
-            value={`${Number(userData.trustScore || 0)}/100`}
-            note="Updated daily in backend"
-          />
-          <StatCard
-            dark={dark}
-            title="Personal Credit Limit"
-            value={`${formatXlm(creditLimit)} XLM`}
-            note="Determined by trust score"
-          />
-          <StatCard
-            dark={dark}
-            title="Duration"
-            value={`${Number(policy.durationValue || 30)} ${policy.durationUnit}`}
-            note="Admin final say on repayment terms"
-          />
-        </div>
-
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Fuel Credit Request</h3>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input
-              value={requestedAmount}
-              onChange={(e) => setRequestedAmount(e.target.value)}
-              type="number"
-              placeholder="Requested amount"
-              style={inputStyle(dark)}
-            />
-            <PrimaryButton dark={dark} onClick={handleRequestCredit} disabled={busy}>
-              Request Credit
-            </PrimaryButton>
-            <PrimaryButton
-              dark={dark}
-              ghost
-              onClick={() => alert("Bluetooth receive is handled by the cooperative matching service.")}
-            >
-              Bluetooth Receive
-            </PrimaryButton>
+      <div className="max-w-5xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className={`text-2xl font-black ${dark ? 'text-white' : 'text-gray-900'}`}>Driver Credit Portal</h1>
+            <p className={`text-xs mt-1 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Request fuel credit loans and manage Soroban repayments</p>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border px-4 py-2 bg-amber-500/10 border-amber-500/20 text-[#FF8833] text-xs font-black uppercase tracking-wider">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+            </span>
+            Credit Line Connected
           </div>
         </div>
 
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Current Credit</h3>
-          {!activeLoan ? (
-            <div style={{ color: dark ? "#94a3b8" : "#64748b" }}>No active request or loan.</div>
-          ) : activeLoan.status === "pending" ? (
-            <div>Request pending cooperative approval.</div>
-          ) : (
-            <div style={{ display: "grid", gap: 10 }}>
-              <div>Approved amount: {formatXlm(Number(activeLoan.approvedAmount || activeLoan.amount))} XLM</div>
-              <div>Interest rate: {Number(activeLoan.interestRate || 3)}%</div>
-              <div>Duration: {Number(activeLoan.durationDays || 30)} days</div>
-              <PrimaryButton dark={dark} onClick={handleRepay} disabled={busy}>
-                Repay Credit
-              </PrimaryButton>
+        {/* Primary Stats Bento Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className={`p-6 rounded-[24px] border shadow-sm flex flex-col justify-between ${cardStyle}`}>
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Trust Score</p>
+              <h3 className="text-2xl font-black mt-2 text-[#FF8833]">{Number(userData.trustScore || 0)} / 100</h3>
             </div>
-          )}
+            <span className="text-[10px] text-gray-500 mt-4">Updated daily based on compliance</span>
+          </div>
+
+          <div className={`p-6 rounded-[24px] border shadow-sm flex flex-col justify-between ${cardStyle}`}>
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Personal Credit Limit</p>
+              <h3 className="text-2xl font-black mt-2 text-emerald-500">{formatXlm(creditLimit)} XLM</h3>
+            </div>
+            <span className="text-[10px] text-gray-500 mt-4">Determined by active trust standing</span>
+          </div>
+
+          <div className={`p-6 rounded-[24px] border shadow-sm flex flex-col justify-between ${cardStyle}`}>
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-wider">Standard Repayment Term</p>
+              <h3 className="text-2xl font-black mt-2 text-gray-300">
+                {Number(policy.durationValue || 30)} {policy.durationUnit}
+              </h3>
+            </div>
+            <span className="text-[10px] text-gray-500 mt-4">Cooperative loan policy configuration</span>
+          </div>
         </div>
+
+        {/* Sub Layout columns */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          
+          {/* Left Column: Apply Form */}
+          <div className={`p-6 rounded-[28px] border shadow-sm space-y-6 ${cardStyle}`}>
+            <div>
+              <h3 className="text-base font-black">Request Fuel Credit</h3>
+              <p className="text-xs text-gray-500 mt-1">Submit a credit request directly to your cooperative</p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black mb-1.5 uppercase text-gray-400">Request Amount (XLM)</label>
+                <input
+                  value={requestedAmount}
+                  onChange={(e) => setRequestedAmount(e.target.value)}
+                  type="number"
+                  placeholder="Enter XLM value"
+                  className={`w-full px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-[#FF6B00] ${
+                    dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900'
+                  }`}
+                />
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-2">
+                <button
+                  onClick={handleRequestCredit}
+                  disabled={busy}
+                  className="flex-1 px-5 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider text-white bg-[#FF6B00] hover:bg-[#E05E00] disabled:opacity-50 active:scale-95 transition-all shadow-md shadow-[#FF6B00]/10"
+                >
+                  Request Credit
+                </button>
+                <button
+                  onClick={() => alert("Bluetooth receive is handled by the cooperative matching service.")}
+                  className={`px-4 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+                    dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-800 hover:bg-gray-50'
+                  }`}
+                >
+                  Bluetooth Receive
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Active Credit state */}
+          <div className={`p-6 rounded-[28px] border shadow-sm flex flex-col justify-between ${cardStyle}`}>
+            <div>
+              <h3 className="text-base font-black mb-4">Current Credit Status</h3>
+              
+              {!activeLoan ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <span className="text-3xl mb-2">🚗</span>
+                  <div className="font-extrabold text-sm text-gray-400">No Active Loan or Request</div>
+                  <p className="text-xs text-gray-500 max-w-[220px] mt-1 mx-auto leading-relaxed">
+                    Submit a credit request on the left to gain fuel allocation limits.
+                  </p>
+                </div>
+              ) : activeLoan.status === "pending" ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <span className="text-3xl mb-2 animate-pulse">⏳</span>
+                  <div className="font-extrabold text-sm text-amber-500 uppercase tracking-wider">Approval Pending</div>
+                  <p className="text-xs text-gray-500 max-w-[220px] mt-1 mx-auto leading-relaxed">
+                    Your request of {formatXlm(Number(activeLoan.amount))} XLM is awaiting approval from your cooperative.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className={`p-4 rounded-2xl border bg-emerald-500/5 ${dark ? 'border-emerald-500/10' : 'border-emerald-500/20'} space-y-3 text-xs`}>
+                    <div className="flex justify-between font-semibold">
+                      <span className="text-gray-400">Approved Loan:</span>
+                      <span className="font-extrabold text-emerald-400">{formatXlm(Number(activeLoan.approvedAmount || activeLoan.amount))} XLM</span>
+                    </div>
+                    <div className="flex justify-between font-semibold">
+                      <span className="text-gray-400">Interest Rate:</span>
+                      <span className="font-bold text-gray-300">{Number(activeLoan.interestRate || 3)}%</span>
+                    </div>
+                    <div className="flex justify-between font-semibold">
+                      <span className="text-gray-400">Maturity Duration:</span>
+                      <span className="font-bold text-gray-300">{Number(activeLoan.durationDays || 30)} days</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-500 leading-relaxed font-medium">
+                    Ensure prompt repayment via Soroban smart contracts. Compliant repayment behavior automatically builds your driver trust telemetry.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {activeLoan && activeLoan.status === "active" && (
+              <button
+                onClick={handleRepay}
+                disabled={busy}
+                className="w-full mt-6 px-5 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 active:scale-95 transition-all shadow-md shadow-emerald-600/15"
+              >
+                {busy ? "Repaying..." : "Repay Credit Term"}
+              </button>
+            )}
+          </div>
+
+        </div>
+
       </div>
     </UserLayout>
   );

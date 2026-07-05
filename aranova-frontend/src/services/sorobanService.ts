@@ -332,3 +332,86 @@ export async function repayCredit(
     signingHandler
   );
 }
+
+/**
+ * Submit P2P payment through smart contract with vault routing percentage
+ */
+export async function payP2P(
+  senderAddress: string,
+  recipientAddress: string,
+  amount: bigint,
+  vaultPctBps: bigint,
+  signingHandler: any,
+  tokenAddress: string = DEFAULT_TOKEN_ADDRESS
+): Promise<string> {
+  return submitWriteTransaction(
+    senderAddress,
+    "pay",
+    [
+      Address.fromString(senderAddress).toScVal(),
+      Address.fromString(recipientAddress).toScVal(),
+      Address.fromString(tokenAddress).toScVal(),
+      nativeToScVal(amount, { type: "i128" }),
+      nativeToScVal(vaultPctBps, { type: "i128" }),
+    ],
+    signingHandler
+  );
+}
+
+/**
+ * Lock funds directly into personal vault on-chain
+ */
+export async function lockVaultOnChain(
+  ownerAddress: string,
+  amount: bigint,
+  signingHandler: any,
+  tokenAddress: string = DEFAULT_TOKEN_ADDRESS
+): Promise<string> {
+  return submitWriteTransaction(
+    ownerAddress,
+    "lock_vault",
+    [
+      Address.fromString(ownerAddress).toScVal(),
+      Address.fromString(tokenAddress).toScVal(),
+      nativeToScVal(amount, { type: "i128" }),
+    ],
+    signingHandler
+  );
+}
+
+/**
+ * Redeem locked funds from personal vault on-chain
+ */
+export async function redeemVaultOnChain(
+  ownerAddress: string,
+  amount: bigint,
+  signingHandler: any,
+  tokenAddress: string = DEFAULT_TOKEN_ADDRESS
+): Promise<string> {
+  return submitWriteTransaction(
+    ownerAddress,
+    "redeem_vault",
+    [
+      Address.fromString(ownerAddress).toScVal(),
+      Address.fromString(tokenAddress).toScVal(),
+      nativeToScVal(amount, { type: "i128" }),
+    ],
+    signingHandler
+  );
+}
+
+/**
+ * Query on-chain vault balance of a user
+ */
+export async function getVaultBalanceOnChain(ownerAddress: string): Promise<bigint> {
+  try {
+    const result = await simulateReadOnlyCall("get_vault", [
+      Address.fromString(ownerAddress).toScVal(),
+    ]);
+    return result ? BigInt(result) : 0n;
+  } catch (err) {
+    console.warn("Blockchain vault balance query failed. Relying on synced database records.");
+    return -1n;
+  }
+}
+

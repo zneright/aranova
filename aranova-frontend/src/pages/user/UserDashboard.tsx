@@ -9,12 +9,15 @@ import {
     increment,
     onSnapshot,
     query,
+    where,
     serverTimestamp,
     updateDoc,
-    where,
+    setDoc,
 } from "firebase/firestore";
 import { auth, db } from "../../firebase/config";
-import UserLayout, { useTheme } from "../../components/layout/UserLayout";
+import UserLayout from "../../components/layout/UserLayout";
+import { useTheme } from "../../contexts/ThemeContext";
+import { useAuth } from "../../contexts/AuthContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import {
     ensureUserProfile,
@@ -24,96 +27,15 @@ import {
     syncBluetoothQueue,
 } from "../../services/aranovaWorkflow";
 import CryptoJS from "crypto-js";
-import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
-import { NETWORK_PASSPHRASE, getLiveStellarBalance, submitStellarPayment, HORIZON_URL } from "../../services/sorobanService";
+import { getLiveStellarBalance, payP2P, getVaultBalanceOnChain, HORIZON_URL } from "../../services/sorobanService";
 import { Html5Qrcode } from "html5-qrcode";
 import { Horizon } from "@stellar/stellar-sdk";
 import QRCode from "qrcode";
 
-// Helper: resolve active signer credentials based on user profile type (native soft key vs freighter extension)
-const getSigningHandler = async (userData: any, networkPassphrase: string) => {
-    if (userData.encryptedSecretKey) {
-        const pin = prompt("Enter your 4-digit PIN to authorize this contract transaction:");
-        if (!pin) throw new Error("Transaction signature cancelled.");
-
-        try {
-            const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, pin);
-            const secret = bytes.toString(CryptoJS.enc.Utf8);
-            if (!secret || !secret.startsWith("S")) {
-                throw new Error("Invalid PIN or corrupted key.");
-            }
-            return { signWithSecret: secret };
-        } catch (err) {
-            alert("Failed to decrypt key. Please check your PIN.");
-            throw err;
-        }
-    } else {
-        const walletId = userData.network?.toLowerCase() || "freighter";
-        let module: any;
-        if (walletId.includes("xbull")) {
-            module = new xBullModule();
-        } else if (walletId.includes("lobstr")) {
-            module = new LobstrModule();
-        } else {
-            module = new FreighterModule();
-        }
-
-        const isAvailable = await module.isAvailable();
-        if (!isAvailable) {
-            throw new Error(`${walletId.toUpperCase()} wallet is not available/detected.`);
-        }
-
-        return {
-            signWithWallet: async (xdr: string) => {
-                return await module.signTransaction(xdr, {
-                    networkPassphrase,
-                    publicKey: userData.publicKey,
-                });
-            }
-        };
-    }
-};
-
-const StatCard: React.FC<{ title: string; value: string; note?: string; dark: boolean }> = ({ title, value, note, dark }) => (
-    <div style={{ background: dark ? "#08111f" : "#ffffff", border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, borderRadius: 18, padding: 16 }}>
-        <div style={{ fontSize: 12, color: dark ? "#94a3b8" : "#64748b", marginBottom: 8 }}>{title}</div>
-        <div style={{ fontSize: 20, fontWeight: 800 }}>{value}</div>
-        {note && <div style={{ marginTop: 6, fontSize: 12, color: dark ? "#64748b" : "#94a3b8" }}>{note}</div>}
-    </div>
-);
-
-const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { dark: boolean; ghost?: boolean }> = ({ dark, ghost, style, ...props }) => (
-    <button
-        {...props}
-        style={{
-            border: "none",
-            borderRadius: 999,
-            padding: "12px 16px",
-            fontWeight: 800,
-            cursor: props.disabled ? "not-allowed" : "pointer",
-            background: ghost ? (dark ? "#1f2937" : "#e2e8f0") : (dark ? "#10b981" : "#0f766e"),
-            color: ghost ? (dark ? "#f8fafc" : "#111827") : "#ffffff",
-            ...style,
-        }}
-    />
-);
-
-const inputStyle = (dark: boolean) => ({
-    width: "100%",
-    border: `1px solid ${dark ? "#334155" : "#cbd5e1"}`,
-    borderRadius: 14,
-    padding: "12px 14px",
-    background: dark ? "#0f172a" : "#ffffff",
-    color: dark ? "#f8fafc" : "#111827",
-    outline: "none",
-});
-
 const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 200 }) => {
     const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
 
-    React.useEffect(() => {
+    useEffect(() => {
         if (canvasRef.current && text) {
             QRCode.toCanvas(canvasRef.current, text, { width: size, margin: 1 }, (error) => {
                 if (error) console.error("Error generating QR:", error);
@@ -133,27 +55,62 @@ const syncReceivedOfflinePayments = async (uid: string) => {
     const received = JSON.parse(localStorage.getItem(key) || "[]") as any[];
     if (received.length === 0) return;
 
+    const recSnap = await getDoc(doc(db, "users", uid));
+    let vaultPct = 0;
+    let preferredDays = 30;
+    if (recSnap.exists()) {
+        vaultPct = recSnap.data().vaultRoutingPct || 0;
+        preferredDays = recSnap.data().vaultPreferredDays || 30;
+    }
+
     for (const item of received) {
         try {
+            const amount = Number(item.amount);
+            const vault_portion = (amount * vaultPct) / 100;
+            const wallet_portion = amount - vault_portion;
+
             await addDoc(collection(db, "offline_payments"), {
                 payerId: item.payerId,
                 payerKey: item.payerKey,
                 recipientId: uid,
-                amount: Number(item.amount),
+                amount: amount,
                 nonce: item.nonce,
                 channel: "offline_qr",
                 status: "synced",
                 createdAt: serverTimestamp(),
             });
 
-            await updateDoc(doc(db, "users", item.payerId), { walletBalance: increment(-Number(item.amount)) });
-            await updateDoc(doc(db, "users", uid), { walletBalance: increment(Number(item.amount)) });
+            try {
+                await updateDoc(doc(db, "users", item.payerId), { walletBalance: increment(-amount) });
+            } catch (err) {
+                console.warn("Could not decrement offline payer Firestore balance directly:", err);
+            }
+
+            await updateDoc(doc(db, "users", uid), { 
+                walletBalance: increment(wallet_portion),
+                vaultBalance: increment(vault_portion),
+            });
+
+            if (vault_portion > 0) {
+                const calculatedMaturityDate = new Date(Date.now() + preferredDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                const vaultId = `${uid}_vault_offline_${Date.now()}`;
+                await setDoc(doc(db, "vaults", vaultId), {
+                    ownerId: uid,
+                    lockedAmount: vault_portion,
+                    lockPercent: vaultPct,
+                    lockDays: preferredDays,
+                    maturityDate: calculatedMaturityDate,
+                    status: "locked",
+                    createdAt: serverTimestamp(),
+                    isOfflineRouted: true,
+                });
+            }
 
             await addDoc(collection(db, "transactions"), {
                 type: "offline_qr_settled",
                 from: item.payerId,
                 to: uid,
-                amount: Number(item.amount),
+                amount: amount,
                 status: "completed",
                 createdAt: serverTimestamp(),
             });
@@ -167,35 +124,157 @@ const syncReceivedOfflinePayments = async (uid: string) => {
 
 const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ userData, onRefresh }) => {
     const { dark } = useTheme();
+    const role = userData?.role || "commuter";
+    
     const [recipient, setRecipient] = useState("");
-    const [amount, setAmount] = useState("");
+    const [amount, setAmount] = useState("0");
     const [busy, setBusy] = useState(false);
     const [offlineQueueLength, setOfflineQueueLength] = useState(0);
 
     // QR & Camera & Offline States
     const [scanning, setScanning] = useState(false);
     const [showReceiveModal, setShowReceiveModal] = useState(false);
+    const [showPayModal, setShowPayModal] = useState(false);
     const [activeReceipt, setActiveReceipt] = useState<any>(null);
     const [scannedRecipient, setScannedRecipient] = useState<string | null>(null);
     const [recipientName, setRecipientName] = useState("");
+
+    // Custom PIN state
+    const [showPinModal, setShowPinModal] = useState(false);
+    const [pinDigits, setPinDigits] = useState("");
+    const [pinError, setPinError] = useState("");
+    const [pinPurpose, setPinPurpose] = useState("");
+    const [pinCallback, setPinCallback] = useState<((secret: string) => void) | null>(null);
+
+    // Processing breakdown loader state
+    const [processingState, setProcessingState] = useState<string | null>(null);
+    const [processingBreakdown, setProcessingBreakdown] = useState<{
+        total: number;
+        pct: number;
+        vault: number;
+        wallet: number;
+    } | null>(null);
+
+    // Ref to track processed transaction hashes to prevent duplicates
+    const processedTxsRef = React.useRef<Record<string, boolean>>({});
+    const markTxProcessed = (txHash: string) => {
+        if (!txHash) return false;
+        if (processedTxsRef.current[txHash]) return true;
+        processedTxsRef.current[txHash] = true;
+        return false;
+    };
 
     const availableCredit = useMemo(() => Math.max(25, Number(userData.trustScore || 0) * 2), [userData.trustScore]);
 
     const handleDownloadQr = async () => {
         try {
-            const response = await fetch(`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(userData.publicKey)}`);
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `aranova-receive-qr-${userData.uid}.png`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
+            const qrSize = 280;
+            const cardW = 520;
+            const cardH = 700;
+            const canvas = document.createElement("canvas");
+            canvas.width = cardW;
+            canvas.height = cardH;
+            const ctx = canvas.getContext("2d")!;
+
+            // Role-specific palette
+            const roleConfig = {
+                commuter:    { bg: "#0E0F14", accent: "#FFE600", accentText: "#0B0C10", label: "Commuter Pass", icon: "💳" },
+                driver:      { bg: "#14100A", accent: "#FF6B00", accentText: "#ffffff", label: "Driver Wallet",  icon: "🛺" },
+                cooperative: { bg: "#080F14", accent: "#10B981", accentText: "#ffffff", label: "Coop Treasury", icon: "🏢" },
+            };
+            const cfg = roleConfig[role as keyof typeof roleConfig] || roleConfig.commuter;
+
+            // Background
+            ctx.fillStyle = cfg.bg;
+            ctx.fillRect(0, 0, cardW, cardH);
+
+            // Top accent bar
+            ctx.fillStyle = cfg.accent;
+            ctx.fillRect(0, 0, cardW, 8);
+
+            // Glow orb
+            const grad = ctx.createRadialGradient(cardW, 0, 10, cardW, 0, 300);
+            grad.addColorStop(0, cfg.accent + "22");
+            grad.addColorStop(1, "transparent");
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, 0, cardW, cardH);
+
+            // ARANOVA wordmark
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 18px 'Arial', sans-serif";
+            ctx.fillText("ARANOVA", 36, 56);
+
+            // Role badge
+            const badgeX = cardW - 36 - ctx.measureText(cfg.label).width - 24;
+            ctx.fillStyle = cfg.accent + "22";
+            ctx.beginPath();
+            ctx.roundRect(badgeX - 12, 36, ctx.measureText(cfg.label).width + 32, 28, 14);
+            ctx.fill();
+            ctx.fillStyle = cfg.accent;
+            ctx.font = "bold 11px 'Arial', sans-serif";
+            ctx.fillText(cfg.icon + " " + cfg.label, badgeX, 55);
+
+            // Divider
+            ctx.fillStyle = "rgba(255,255,255,0.06)";
+            ctx.fillRect(36, 76, cardW - 72, 1);
+
+            // User display name
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "bold 32px 'Arial', sans-serif";
+            const displayName = userData?.displayName || userData?.coopName || "Aranova User";
+            ctx.fillText(displayName, 36, 128);
+
+            // Generate QR onto an off-screen canvas first
+            const qrCanvas = document.createElement("canvas");
+            await QRCode.toCanvas(qrCanvas, userData.publicKey || userData.uid, { width: qrSize, margin: 2, color: { dark: "#000000", light: "#ffffff" } });
+
+            // White rounded rect behind QR
+            const qrX = (cardW - qrSize) / 2;
+            const qrY = 160;
+            ctx.fillStyle = "#ffffff";
+            ctx.beginPath();
+            ctx.roundRect(qrX - 12, qrY - 12, qrSize + 24, qrSize + 24, 20);
+            ctx.fill();
+            ctx.drawImage(qrCanvas, qrX, qrY);
+
+            // Accent line under QR
+            ctx.fillStyle = cfg.accent;
+            ctx.fillRect(qrX - 12, qrY + qrSize + 12, qrSize + 24, 3);
+
+            // "Scan to pay me" label
+            ctx.fillStyle = "rgba(255,255,255,0.5)";
+            ctx.font = "13px 'Arial', sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("Scan to pay me on Aranova", cardW / 2, qrY + qrSize + 36);
+
+            // Public key address (truncated)
+            const pk = userData.publicKey || "";
+            const pkDisplay = pk.length > 20 ? pk.slice(0, 20) + "..." + pk.slice(-20) : pk;
+            ctx.fillStyle = "rgba(255,255,255,0.35)";
+            ctx.font = "11px 'Courier New', monospace";
+            ctx.fillText(pkDisplay, cardW / 2, qrY + qrSize + 58);
+
+            // Bottom powered-by line
+            ctx.fillStyle = cfg.accent;
+            ctx.font = "bold 12px 'Arial', sans-serif";
+            ctx.fillText("Powered by Aranova · Stellar Blockchain", cardW / 2, cardH - 28);
+
+            ctx.textAlign = "left";
+
+            canvas.toBlob((blob) => {
+                if (!blob) return;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `aranova-qr-${displayName.replace(/\s+/g, "_")}.png`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, "image/png");
         } catch (e) {
-            console.error("Failed to download QR code:", e);
-            alert("Could not download QR code. Please try again.");
+            console.error("Failed to generate QR card:", e);
+            alert("Could not generate QR card. Please try again.");
         }
     };
 
@@ -213,6 +292,53 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         checkOfflineQueue();
     }, [userData.uid]);
 
+    // Pull recent Horizon payments on mount
+    useEffect(() => {
+        if (!userData.publicKey) return;
+
+        const checkRecentPayments = async () => {
+            try {
+                const horizon = new Horizon.Server(HORIZON_URL);
+                const paymentsPage = await horizon.payments()
+                    .forAccount(userData.publicKey)
+                    .order("desc")
+                    .limit(3)
+                    .call();
+
+                if (paymentsPage.records && paymentsPage.records.length > 0) {
+                    for (const payment of paymentsPage.records) {
+                        if (payment.type === "payment" && payment.asset_type === "native" && payment.to === userData.publicKey && payment.from !== userData.publicKey) {
+                            const createdTime = new Date(payment.created_at).getTime();
+                            const isVeryRecent = Date.now() - createdTime < 45000;
+
+                            if (isVeryRecent) {
+                                const txHash = payment.transaction_hash;
+                                if (!markTxProcessed(txHash)) {
+                                    setActiveReceipt({
+                                        type: "Receive (On-Chain)",
+                                        amount: Number(payment.amount),
+                                        sender: payment.from,
+                                        recipient: userData.publicKey,
+                                        status: "Pay settled",
+                                        txHash,
+                                        timestamp: createdTime,
+                                    });
+                                    onRefresh();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn("Could not check recent payments on load:", e);
+            }
+        };
+
+        const timer = setTimeout(checkRecentPayments, 1500);
+        return () => clearTimeout(timer);
+    }, [userData.publicKey, onRefresh]);
+
     useEffect(() => {
         if (!userData.uid) return;
 
@@ -229,6 +355,28 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             where("to", "in", destinations)
         );
 
+        const handleIncomingVaultSplit = async (data: any, txHash: string) => {
+            if (data.vaultPortion && data.vaultPortion > 0) {
+                try {
+                    const lockDays = data.lockDays || 30;
+                    const calculatedMaturityDate = new Date(Date.now() + lockDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                    const vaultId = `${userData.uid}_vault_${Date.now()}`;
+                    await setDoc(doc(db, "vaults", vaultId), {
+                        ownerId: userData.uid,
+                        lockedAmount: data.vaultPortion,
+                        lockPercent: data.routingPct || 0,
+                        lockDays: lockDays,
+                        maturityDate: calculatedMaturityDate,
+                        status: "locked",
+                        txHash: txHash,
+                        createdAt: serverTimestamp(),
+                    });
+                } catch (e) {
+                    console.warn("Failed to create receiver vault document:", e);
+                }
+            }
+        };
+
         let lastTxId = "";
         const unsub = onSnapshot(transQuery, (snap) => {
             if (snap.empty) return;
@@ -239,21 +387,38 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             });
             const latestDoc = docs[0];
             const data = latestDoc.data();
+            const txHash = data.blockchainTxHash || latestDoc.id;
 
             if (lastTxId === "") {
                 lastTxId = latestDoc.id;
+                const txTime = data.createdAt?.toMillis() || Date.now();
+                const isVeryRecent = Date.now() - txTime < 35000;
+                if (isVeryRecent && data.from !== userData.uid && !markTxProcessed(txHash)) {
+                    handleIncomingVaultSplit(data, txHash);
+                    setActiveReceipt({
+                        type: "Receive (On-Chain)",
+                        amount: Number(data.amount || 0),
+                        sender: data.from,
+                        recipient: userData.publicKey,
+                        status: "Pay settled",
+                        txHash: data.blockchainTxHash,
+                        timestamp: txTime,
+                    });
+                    onRefresh();
+                }
                 return;
             }
 
             if (latestDoc.id !== lastTxId) {
                 lastTxId = latestDoc.id;
-                if (data.from !== userData.uid) {
+                if (data.from !== userData.uid && !markTxProcessed(txHash)) {
+                    handleIncomingVaultSplit(data, txHash);
                     setActiveReceipt({
-                        type: "Payment Received (On-Chain)",
+                        type: "Receive (On-Chain)",
                         amount: Number(data.amount || 0),
                         sender: data.from,
                         recipient: userData.publicKey,
-                        status: "Settled On-Chain",
+                        status: "Pay settled",
                         txHash: data.blockchainTxHash,
                         timestamp: data.createdAt?.toMillis() || Date.now(),
                     });
@@ -262,32 +427,29 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             }
         }, (err) => console.warn("Transaction listener warning:", err));
 
-        // Stellar Horizon stream listener for external payments (e.g. Lobstr, Freighter)
         let closeHorizonStream = () => {};
         if (userData.publicKey) {
             const horizon = new Horizon.Server(HORIZON_URL);
-            let initialMessage = true;
             try {
                 closeHorizonStream = horizon.payments()
                     .forAccount(userData.publicKey)
                     .cursor("now")
                     .stream({
                         onmessage: (payment: any) => {
-                            if (initialMessage) {
-                                initialMessage = false;
-                                return;
-                            }
                             if (payment.type === "payment" && payment.asset_type === "native" && payment.to === userData.publicKey && payment.from !== userData.publicKey) {
-                                setActiveReceipt({
-                                    type: "Payment Received (Stellar Ledger)",
-                                    amount: Number(payment.amount),
-                                    sender: payment.from,
-                                    recipient: userData.publicKey,
-                                    status: "Settled On-Chain",
-                                    txHash: payment.transaction_hash,
-                                    timestamp: Date.now(),
-                                });
-                                onRefresh();
+                                const txHash = payment.transaction_hash;
+                                if (!markTxProcessed(txHash)) {
+                                    setActiveReceipt({
+                                        type: "Receive (On-Chain)",
+                                        amount: Number(payment.amount),
+                                        sender: payment.from,
+                                        recipient: userData.publicKey,
+                                        status: "Pay settled",
+                                        txHash,
+                                        timestamp: Date.now(),
+                                    });
+                                    onRefresh();
+                                }
                             }
                         },
                         onerror: (err: any) => {
@@ -317,9 +479,7 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                     handleScanSuccess(decodedText);
                     scanner?.stop().then(() => setScanning(false)).catch(() => undefined);
                 },
-                () => {
-                    // silent ignore frame scan failure
-                }
+                () => {}
             ).catch((err) => {
                 console.error("Camera scanner error:", err);
                 alert("Failed to start camera: " + err);
@@ -353,11 +513,11 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                     checkOfflineQueue();
 
                     setActiveReceipt({
-                        type: "Offline QR Scan (Received)",
+                        type: "Receive (Offline Captured)",
                         amount: Number(payload.amount),
                         sender: payload.payerKey || payload.payerId,
                         recipient: userData.publicKey,
-                        status: navigator.onLine ? "Settled On-Chain" : "Queued Offline",
+                        status: navigator.onLine ? "Pay settled" : "Offline Queued",
                         nonce: payload.nonce,
                         timestamp: payload.timestamp,
                     });
@@ -421,7 +581,6 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             queued.push(payloadObj);
             localStorage.setItem(key, JSON.stringify(queued));
 
-            // Automatically queue Bluetooth synchronization for background broadcast
             queueBluetoothPayment(userData.uid, { recipient, amount: value, mode: "bluetooth" });
             addDoc(collection(db, "offline_payments"), {
                 payerId: userData.uid,
@@ -435,11 +594,11 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             checkOfflineQueue();
 
             setActiveReceipt({
-                type: "Offline Send (Queued via Bluetooth & QR)",
+                type: "Pay (Offline Captured)",
                 amount: value,
                 sender: userData.publicKey,
                 recipient,
-                status: "Queued Offline",
+                status: "Offline Queued",
                 nonce,
                 timestamp: Date.now(),
                 payload: payloadObj,
@@ -447,10 +606,11 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             return;
         }
 
-        setBusy(true);
         try {
             let destPublicKey = recipient;
             let destUid = "";
+            let recipientVaultRoutingPct = 0;
+            let recipientPreferredDays = 30;
 
             const isStellarKey = recipient.startsWith("G") && recipient.length === 56;
             if (!isStellarKey) {
@@ -458,12 +618,16 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                 if (snap.exists()) {
                     destPublicKey = snap.data().publicKey;
                     destUid = snap.id;
+                    recipientVaultRoutingPct = snap.data().vaultRoutingPct || 0;
+                    recipientPreferredDays = snap.data().vaultPreferredDays || 30;
                 } else {
                     const qEmail = query(collection(db, "users"), where("email", "==", recipient));
                     const qSnap = await getDocs(qEmail);
                     if (!qSnap.empty) {
                         destPublicKey = qSnap.docs[0].data().publicKey;
                         destUid = qSnap.docs[0].id;
+                        recipientVaultRoutingPct = qSnap.docs[0].data().vaultRoutingPct || 0;
+                        recipientPreferredDays = qSnap.docs[0].data().vaultPreferredDays || 30;
                     } else {
                         throw new Error("Recipient public key, user ID, or email not found.");
                     }
@@ -473,6 +637,8 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                 const qSnap = await getDocs(qKey);
                 if (!qSnap.empty) {
                     destUid = qSnap.docs[0].id;
+                    recipientVaultRoutingPct = qSnap.docs[0].data().vaultRoutingPct || 0;
+                    recipientPreferredDays = qSnap.docs[0].data().vaultPreferredDays || 30;
                 }
             }
 
@@ -480,46 +646,84 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                 throw new Error("Could not resolve recipient's Stellar public key.");
             }
 
-            const handler = await getSigningHandler(userData, NETWORK_PASSPHRASE);
-            const txHash = await submitStellarPayment(userData.publicKey, destPublicKey, value.toFixed(7), handler);
-            console.log("Real Stellar payment transaction successful:", txHash);
-
-            await addDoc(collection(db, "transactions"), {
-                type: "send",
-                from: userData.uid,
-                to: destUid || destPublicKey,
-                amount: value,
-                channel: "wallet",
-                status: "completed",
-                blockchainTxHash: txHash,
-                createdAt: serverTimestamp(),
+            const vault_portion = (value * recipientVaultRoutingPct) / 100;
+            const wallet_portion = value - vault_portion;
+            setProcessingBreakdown({
+                total: value,
+                pct: recipientVaultRoutingPct,
+                vault: vault_portion,
+                wallet: wallet_portion,
             });
 
-            await updateDoc(doc(db, "users", userData.uid), {
-                walletBalance: increment(-value),
-                trustScore: Math.min(100, Number(userData.trustScore || 0) + 1),
-                lastTrustUpdate: serverTimestamp(),
-            });
+            setPinPurpose(`Pay ${value.toFixed(2)} XLM to recipient`);
+            setPinDigits("");
+            setPinError("");
+            setPinCallback(() => async (secret: string) => {
+                setBusy(true);
+                setProcessingState("Constructing Soroban payment payload...");
+                try {
+                    const handler = { signWithSecret: secret };
+                    setProcessingState("Encoding variables & calculating slices...");
 
-            setActiveReceipt({
-                type: "Send payment (Sent)",
-                amount: value,
-                sender: userData.publicKey,
-                recipient: destPublicKey,
-                status: "Settled On-Chain",
-                txHash,
-                timestamp: Date.now(),
+                    const amountStroops = BigInt(Math.round(value * 10_000_000));
+                    const vaultPctBps = BigInt(recipientVaultRoutingPct * 100);
+                    
+                    setProcessingState("Simulating smart contract on-chain execution...");
+                    const txHash = await payP2P(
+                        userData.publicKey,
+                        destPublicKey,
+                        amountStroops,
+                        vaultPctBps,
+                        handler
+                    );
+                    
+                    setProcessingState("Finalizing ledger validation...");
+
+                    await addDoc(collection(db, "transactions"), {
+                        type: "send",
+                        from: userData.uid,
+                        to: destUid || destPublicKey,
+                        amount: value,
+                        vaultPortion: vault_portion,
+                        routingPct: recipientVaultRoutingPct,
+                        lockDays: recipientPreferredDays,
+                        channel: "wallet",
+                        status: "completed",
+                        blockchainTxHash: txHash,
+                        createdAt: serverTimestamp(),
+                    });
+
+                    await updateDoc(doc(db, "users", userData.uid), {
+                        walletBalance: increment(-value),
+                        trustScore: Math.min(100, Number(userData.trustScore || 0) + 1),
+                        lastTrustUpdate: serverTimestamp(),
+                    });
+
+                    setActiveReceipt({
+                        type: "Pay (On-Chain)",
+                        amount: value,
+                        sender: userData.publicKey,
+                        recipient: destPublicKey,
+                        status: "Pay settled",
+                        txHash,
+                        timestamp: Date.now(),
+                    });
+                    onRefresh();
+                } catch (err: any) {
+                    console.error(err);
+                    alert(`Payment transaction failed: ${err.message || err}`);
+                } finally {
+                    setBusy(false);
+                    setProcessingBreakdown(null);
+                    setProcessingState(null);
+                }
             });
-            onRefresh();
+            setShowPinModal(true);
         } catch (err: any) {
             console.error(err);
-            alert(`Payment transaction failed: ${err.message || err}`);
-        } finally {
-            setBusy(false);
+            alert(`Payment setup failed: ${err.message || err}`);
         }
     };
-
-
 
     const handleSyncQueue = async () => {
         setBusy(true);
@@ -537,123 +741,1075 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         }
     };
 
+    const handlePinSubmit = () => {
+        if (pinDigits.length < 4) {
+            setPinError("PIN must be 4 digits.");
+            return;
+        }
+        try {
+            const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, pinDigits);
+            const secret = bytes.toString(CryptoJS.enc.Utf8);
+            if (!secret || !secret.startsWith("S")) {
+                throw new Error("Invalid PIN.");
+            }
+            setPinError("");
+            setShowPinModal(false);
+            if (pinCallback) {
+                pinCallback(secret);
+            }
+        } catch (err) {
+            setPinError("Incorrect PIN. Decryption failed.");
+            setPinDigits("");
+        }
+    };
+
+    const handlePinKey = (num: string) => {
+        setPinError("");
+        if (pinDigits.length < 4) {
+            setPinDigits(prev => prev + num);
+        }
+    };
+
+    const handlePinBackspace = () => {
+        setPinError("");
+        setPinDigits(prev => prev.slice(0, -1));
+    };
+
+    const renderPinModal = () => (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-[99999] p-6">
+            <div className={`rounded-[32px] p-8 max-w-sm w-full border shadow-2xl text-center ${
+                dark ? 'bg-[#0E0F14] border-white/10 text-white' : 'bg-white border-gray-100 text-gray-900'
+            }`}>
+                <div className="mb-4">
+                    <span className="text-3xl">🔑</span>
+                    <h3 className="text-lg font-black mt-2">PIN Authorization</h3>
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-wider font-extrabold">{pinPurpose}</p>
+                </div>
+
+                <div className="flex justify-center gap-4 my-6">
+                    {[0, 1, 2, 3].map((idx) => (
+                        <div
+                            key={idx}
+                            className={`w-4 h-4 rounded-full border-2 transition-all duration-150 ${
+                                pinDigits.length > idx
+                                    ? (role === 'driver' ? 'bg-[#FF6B00] border-transparent scale-110' : role === 'cooperative' ? 'bg-[#10B981] border-transparent scale-110' : 'bg-[#FFE600] border-transparent scale-110')
+                                    : 'bg-transparent border-gray-400'
+                            }`}
+                        />
+                    ))}
+                </div>
+
+                {pinError && <p className="text-red-505 text-xs font-black mb-4">{pinError}</p>}
+
+                <div className="grid grid-cols-3 gap-3 max-w-[240px] mx-auto mb-6">
+                    {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((num) => (
+                        <button
+                            key={num}
+                            type="button"
+                            onClick={() => handlePinKey(num)}
+                            className={`h-12 rounded-xl text-lg font-black transition-all active:scale-90 ${
+                                dark ? 'bg-white/5 hover:bg-white/10 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-900'
+                            }`}
+                        >
+                            {num}
+                        </button>
+                    ))}
+                    <button
+                        type="button"
+                        onClick={() => setPinDigits("")}
+                        className={`h-12 rounded-xl text-xs font-black text-red-500 transition-all active:scale-90 ${
+                            dark ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-50 text-gray-800'
+                        }`}
+                    >
+                        Clear
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handlePinKey("0")}
+                        className={`h-12 rounded-xl text-lg font-black transition-all active:scale-90 ${
+                            dark ? 'bg-white/5 hover:bg-white/10 text-white' : 'bg-gray-50 hover:bg-gray-100 text-gray-900'
+                        }`}
+                    >
+                        0
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handlePinBackspace}
+                        className={`h-12 rounded-xl text-sm font-black text-gray-400 transition-all active:scale-90 ${
+                            dark ? 'bg-white/5 hover:bg-white/10' : 'bg-gray-100'
+                        }`}
+                    >
+                        ⌫
+                    </button>
+                </div>
+
+                <div className="flex gap-3">
+                    <button
+                        onClick={handlePinSubmit}
+                        disabled={pinDigits.length < 4}
+                        className={`flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 active:scale-95 ${
+                            role === 'driver' ? 'bg-[#FF6B00] text-white' : role === 'cooperative' ? 'bg-[#10B981] text-white' : 'bg-[#FFE600] text-black'
+                        }`}
+                    >
+                        Confirm
+                    </button>
+                    <button
+                        onClick={() => {
+                            setShowPinModal(false);
+                            setPinCallback(null);
+                        }}
+                        className={`flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all ${
+                            dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200'
+                        }`}
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
+    const renderProcessingOverlay = () => {
+        if (!busy) return null;
+        return (
+            <div className="fixed inset-0 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center z-[99999] p-6 text-center text-white">
+                <div className="relative w-24 h-24 mb-8 flex items-center justify-center">
+                    <div className={`absolute w-full h-full rounded-full border-4 border-t-transparent animate-spin ${
+                        role === 'driver' ? 'border-[#FF6B00]' : role === 'cooperative' ? 'border-[#10B981]' : 'border-[#FFE600]'
+                    }`} />
+                    <span className="text-2xl animate-pulse">⚡</span>
+                </div>
+
+                <h3 className="text-xl font-black mb-1">On-Chain Transaction Processing</h3>
+                <p className="text-xs text-gray-400 mb-6 uppercase tracking-wider font-bold">{processingState || "Broadcasting to Soroban RPC..."}</p>
+
+                {processingBreakdown && (
+                    <div className="w-full max-w-sm rounded-[24px] border border-white/5 bg-[#141620]/45 p-6 mb-8 space-y-4 shadow-xl">
+                        <div className="flex justify-between items-center pb-3 border-b border-white/5">
+                            <span className="text-xs font-bold text-gray-400 uppercase">Total Paid Amount</span>
+                            <span className="text-base font-black">{processingBreakdown.total.toFixed(2)} XLM</span>
+                        </div>
+
+                        <div className="py-2 flex flex-col items-center gap-2">
+                            <div className="text-[10px] uppercase font-black text-gray-400 bg-white/5 px-3 py-1 rounded-full">
+                                Slicing Allocations ({processingBreakdown.pct}%)
+                            </div>
+                            <div className="w-0.5 h-6 bg-dashed border-l border-white/10" />
+                            <div className="grid grid-cols-2 gap-4 w-full">
+                                <div className="p-3 rounded-xl border border-white/5 bg-black/20 text-center relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-full h-0.5 bg-emerald-500 animate-pulse" />
+                                    <span className="text-[9px] font-black uppercase text-emerald-400 block mb-1">Recipient Wallet</span>
+                                    <span className="text-sm font-black">{processingBreakdown.wallet.toFixed(2)} XLM</span>
+                                    <span className="text-[8px] text-gray-500 block mt-0.5 uppercase">Liquid Balance</span>
+                                </div>
+                                <div className="p-3 rounded-xl border border-white/5 bg-black/20 text-center relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-full h-0.5 bg-amber-400 animate-pulse" />
+                                    <span className="text-[9px] font-black uppercase text-amber-400 block mb-1">Locked Vault</span>
+                                    <span className="text-sm font-black">{processingBreakdown.vault.toFixed(2)} XLM</span>
+                                    <span className="text-[8px] text-gray-550 block mt-0.5 uppercase">{processingBreakdown.pct}% Routed</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="text-[10px] text-gray-500 leading-relaxed font-semibold">
+                            Soroban smart contract is routing {processingBreakdown.pct}% directly into the recipient's locked personal vault.
+                        </div>
+                    </div>
+                )}
+
+                <div className="text-xs text-gray-550 animate-pulse">
+                    Please do not navigate away. Awaiting Stellar ledger agreement...
+                </div>
+            </div>
+        );
+    };
+
+    const renderCommuter = () => (
+      <div className="space-y-6">
+        <style>{`
+          #reader {
+            border: none !important;
+          }
+          #reader video {
+            object-fit: cover !important;
+            border-radius: 12px !important;
+          }
+          #reader__header_message {
+            display: none !important;
+          }
+          #reader__dashboard_section_swaplink {
+            display: none !important;
+          }
+          #reader__camera_selection {
+            background: #1f2937 !important;
+            color: #fff !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 8px !important;
+            padding: 4px !important;
+            font-size: 11px !important;
+            margin-top: 8px !important;
+            width: 100% !important;
+          }
+        `}</style>
+
+        <div className="grid grid-cols-2 gap-6 items-stretch animate-slide-up">
+          <div className="h-full flex flex-col">
+            <div className={`relative overflow-hidden rounded-[32px] p-8 flex flex-col justify-between flex-1 border shadow-xl premium-card ${
+              dark 
+                ? 'bg-gradient-to-br from-[#0E0F14] to-[#161822] border-white/5 hover:border-[#FFE600]/30 hover:shadow-[#FFE600]/5' 
+                : 'bg-gradient-to-br from-[#1E293B] to-[#0F172A] border-white/10 hover:border-[#FFE600]/25'
+            }`}>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-[#FFE600] opacity-[0.03] rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">💳</span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Wallet Balance</span>
+                  </div>
+                  <span className={`text-[9px] font-extrabold uppercase px-2.5 py-1 rounded bg-[#FFE600]/10 ${dark ? 'text-[#FFE600]' : 'text-[#8A7D00]'} border border-[#FFE600]/20 transition-all`}>
+                    Commuter Pass
+                  </span>
+                </div>
+                <h1 className="text-4xl sm:text-5xl font-black tracking-tight text-white mt-8">
+                  {formatXlm(Number(userData.walletBalance || 0))} <span className="text-lg font-bold uppercase text-gray-400">XLM</span>
+                </h1>
+              </div>
+              <div className="mt-8 pt-6 border-t border-white/5 flex items-center justify-between text-xs text-gray-400">
+                <span>Stellar Network Wallet</span>
+                <span className="font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  On-Chain Synchronized
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-full flex flex-col">
+            <div className={`rounded-[32px] p-8 border shadow-xl flex-1 flex flex-col justify-between transition-all duration-500 hover:-translate-y-1 hover:shadow-2xl ${
+              dark 
+                ? 'bg-[#0E0F14] border-white/5 hover:border-[#FFE600]/30 hover:shadow-[#FFE600]/5' 
+                : 'bg-white border-[#E2E2DF] hover:border-gray-300'
+            }`}>
+              <div>
+                <h3 className="text-lg font-black mb-2">Pay & Receive</h3>
+                <p className="text-xs text-gray-400 mb-6">Initiate P2P payments or scan commuter fares</p>
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
+                      <input 
+                        value={recipient} 
+                        onChange={(e) => setRecipient(e.target.value)} 
+                        placeholder="Recipient address, public key or email" 
+                        className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#FFE600] hover:border-[#FFE600]/40 transition-all`}
+                      />
+                    </div>
+                    <button 
+                      onClick={() => setScanning((s) => !s)} 
+                      className={`px-5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider border flex items-center justify-center gap-2 whitespace-nowrap active:scale-95 transition-all ${
+                        scanning 
+                          ? 'bg-red-500/10 border-red-500/30 text-red-500' 
+                          : (dark ? 'bg-white/5 border-white/10 text-white hover:bg-white/10 hover:border-white/20' : 'bg-gray-100 border-gray-200 text-gray-800 hover:bg-gray-200')
+                      }`}
+                    >
+                      {scanning ? "Close Cam" : "📷 Scan QR"}
+                    </button>
+                  </div>
+                  <input 
+                    value={amount} 
+                    onChange={(e) => setAmount(e.target.value)} 
+                    type="number" 
+                    placeholder="Amount in XLM" 
+                    className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#FFE600] hover:border-[#FFE600]/40 transition-all`}
+                  />
+                </div>
+                {scanning && (
+                  <div className="mt-4 text-center">
+                    <div id="reader" className="w-full max-w-[200px] h-[200px] mx-auto rounded-xl overflow-hidden border border-dashed border-[#FFE600]/40" />
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-6">
+                <button 
+                  onClick={handleSend} 
+                  disabled={busy} 
+                  className="px-6 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider bg-[#FFE600] text-black hover:bg-[#E6CE00] hover:shadow-lg hover:shadow-[#FFE600]/20 disabled:opacity-50 active:scale-95 transition-all"
+                >
+                  Pay
+                </button>
+                <button 
+                  onClick={() => setShowReceiveModal(true)} 
+                  className={`px-5 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+                    dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-850 hover:bg-gray-100'
+                  }`}
+                >
+                  Receive
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-[32px] p-8 border shadow-xl transition-all duration-505 hover:-translate-y-1 hover:shadow-2xl ${
+          dark 
+            ? 'bg-[#0E0F14] border-white/5 hover:border-[#FFE600]/30 hover:shadow-[#FFE600]/5' 
+            : 'bg-white border-[#E2E2DF] hover:border-gray-300'
+        }`}>
+          <h3 className="text-lg font-black mb-2">Withdraw</h3>
+          <p className="text-xs text-gray-400 mb-4">
+            Withdraw assets to external Stellar exchange terminals. PDAX banking gateway integrations are reserved.
+          </p>
+          <button 
+            onClick={() => alert("Withdraw is reserved for future PDAX integration.")} 
+            className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+              dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-800 hover:bg-gray-100'
+            }`}
+          >
+            Withdraw
+          </button>
+        </div>
+
+        {/* Bento stats row: Vault & Trust */}
+        <div className="grid grid-cols-2 gap-6">
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-500 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#0E0F14] border-white/5 hover:border-[#FFE600]/20' : 'bg-white border-[#E2E2DF] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Locked Vault</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatXlm(Number(userData.vaultBalance || 0))} XLM
+                </h2>
+              </div>
+              <a href="/user/vault" className={`mt-4 inline-flex items-center gap-1 text-[10px] font-black uppercase hover:underline ${dark ? 'text-[#FFE600]' : 'text-[#8A7D00]'}`}>
+                Manage Vault &rarr;
+              </a>
+            </div>
+          </div>
+
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-500 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#0E0F14] border-white/5 hover:border-[#FFE600]/20' : 'bg-white border-[#E2E2DF] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Trust Score</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {Number(userData.trustScore || 0)}/100
+                </h2>
+              </div>
+              <p className="mt-4 text-[10px] text-gray-500 leading-relaxed font-semibold">
+                Limit boost: <span className="text-emerald-500">{formatXlm(availableCredit)} XLM</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+
+    const renderDriver = () => (
+      <div className="space-y-6">
+        <style>{`
+          #reader {
+            border: none !important;
+          }
+          #reader video {
+            object-fit: cover !important;
+            border-radius: 12px !important;
+          }
+          #reader__header_message {
+            display: none !important;
+          }
+          #reader__dashboard_section_swaplink {
+            display: none !important;
+          }
+          #reader__camera_selection {
+            background: #1f2937 !important;
+            color: #fff !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 8px !important;
+            padding: 4px !important;
+            font-size: 11px !important;
+            margin-top: 8px !important;
+            width: 100% !important;
+          }
+        `}</style>
+
+        <div className="grid grid-cols-2 gap-6 items-stretch animate-slide-up">
+          <div className="h-full flex flex-col">
+            <div className={`relative overflow-hidden rounded-[32px] p-8 flex flex-col justify-between border shadow-xl premium-card ${
+              dark 
+                ? 'bg-gradient-to-br from-[#141620] to-[#251A14] border-white/5 hover:border-[#FF6B00]/30 hover:shadow-[#FF6B00]/5' 
+                : 'bg-gradient-to-br from-[#2D231E] to-[#1C1512] border-white/10 hover:border-[#FF6B00]/25'
+            }`}>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-[#FF6B00] opacity-[0.03] rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🛺</span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Wallet Balance</span>
+                  </div>
+                  <span className={`text-[9px] font-extrabold uppercase px-2.5 py-1 rounded bg-[#FF6B00]/10 ${dark ? 'text-[#FF8833]' : 'text-[#D45600]'} border border-[#FF6B00]/20`}>
+                    Driver Wallet
+                  </span>
+                </div>
+                <h1 className="text-4xl sm:text-5xl font-black tracking-tight text-white mt-8">
+                  {formatXlm(Number(userData.walletBalance || 0))} <span className="text-lg font-bold uppercase text-gray-400">XLM</span>
+                </h1>
+              </div>
+              <div className="mt-8 pt-6 border-t border-white/5 flex items-center justify-between text-xs text-gray-400">
+                <span>Stellar Network Wallet</span>
+                <span className="font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  On-Chain Synchronized
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-full flex flex-col">
+            <div className={`rounded-[32px] p-8 border shadow-xl flex-1 flex flex-col justify-between transition-all duration-500 hover:-translate-y-1 hover:shadow-2xl ${
+              dark 
+                ? 'bg-[#141620] border-white/5 hover:border-[#FF6B00]/30 hover:shadow-[#FF6B00]/5' 
+                : 'bg-white border-[#EAE6DF] hover:border-gray-300'
+            }`}>
+              <div>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <div>
+                    <h3 className="text-lg font-black">Pay & Receive</h3>
+                    <p className="text-xs text-gray-400 mt-1">Scan commuter fares or send XLM</p>
+                  </div>
+                  <button 
+                    onClick={() => setScanning((s) => !s)} 
+                    className={`px-5 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider text-white bg-[#FF6B00] hover:bg-[#E05E00] hover:shadow-md hover:shadow-[#FF6B00]/20 active:scale-95 transition-all flex items-center justify-center gap-2 shadow-md`}
+                  >
+                    {scanning ? "Close Camera" : "📷 Scan QR"}
+                  </button>
+                </div>
+                <div className="space-y-4">
+                  <input 
+                    value={recipient} 
+                    onChange={(e) => setRecipient(e.target.value)} 
+                    placeholder="Recipient address, public key or email" 
+                    className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-55 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#FF6B00] hover:border-[#FF6B00]/40 transition-all`}
+                  />
+                  <input 
+                    value={amount} 
+                    onChange={(e) => setAmount(e.target.value)} 
+                    type="number" 
+                    placeholder="Amount in XLM" 
+                    className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-55 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#FF6B00] hover:border-[#FF6B00]/40 transition-all`}
+                  />
+                </div>
+                {scanning && (
+                  <div className="mt-4 text-center">
+                    <div id="reader" className="w-full max-w-[200px] h-[200px] mx-auto rounded-xl overflow-hidden border border-dashed border-[#FF6B00]/40" />
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 mt-6">
+                <button 
+                  onClick={handleSend} 
+                  disabled={busy} 
+                  className="px-6 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider bg-black hover:opacity-90 dark:bg-white dark:text-black hover:shadow-lg disabled:opacity-50 active:scale-95 transition-all"
+                >
+                  Pay
+                </button>
+                <button 
+                  onClick={() => setShowReceiveModal(true)} 
+                  className={`px-5 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+                    dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-850 hover:bg-gray-100'
+                  }`}
+                >
+                  Receive
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-[32px] p-8 border shadow-xl transition-all duration-505 hover:-translate-y-1 hover:shadow-2xl ${
+          dark 
+            ? 'bg-[#141620] border-white/5 hover:border-[#FF6B00]/30 hover:shadow-[#FF6B00]/5' 
+            : 'bg-white border-[#EAE6DF] hover:border-gray-300'
+        }`}>
+          <h3 className="text-lg font-black mb-2">Withdraw</h3>
+          <p className="text-xs text-gray-400 mb-4">
+            Withdraw assets to external Stellar exchange terminals. PDAX banking gateway integrations are reserved.
+          </p>
+          <button 
+            onClick={() => alert("Withdraw is reserved for future PDAX integration.")} 
+            className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+              dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-800 hover:bg-gray-100'
+            }`}
+          >
+            Withdraw
+          </button>
+        </div>
+
+        {/* Bento stats row: Vault & Trust */}
+        <div className="grid grid-cols-2 gap-6">
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-505 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#141620] border-white/5 hover:border-[#FF6B00]/20' : 'bg-white border-[#EAE6DF] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Locked Vault</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatXlm(Number(userData.vaultBalance || 0))} XLM
+                </h2>
+              </div>
+              <a href="/user/vault" className={`mt-4 inline-flex items-center gap-1 text-[10px] font-black uppercase hover:underline ${dark ? 'text-[#FF8833]' : 'text-[#D45600]'}`}>
+                Manage Vault &rarr;
+              </a>
+            </div>
+          </div>
+
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-505 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#141620] border-white/5 hover:border-[#FF6B00]/20' : 'bg-white border-[#EAE6DF] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Trust Score</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {Number(userData.trustScore || 0)}/100
+                </h2>
+              </div>
+              <p className="mt-4 text-[10px] text-gray-500 leading-relaxed font-semibold">
+                Limit boost: <span className="text-[#FF8833]">{formatXlm(availableCredit)} XLM</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+
+    const renderCooperative = () => (
+      <div className="space-y-6">
+        <style>{`
+          #reader {
+            border: none !important;
+          }
+          #reader video {
+            object-fit: cover !important;
+            border-radius: 12px !important;
+          }
+          #reader__header_message {
+            display: none !important;
+          }
+          #reader__dashboard_section_swaplink {
+            display: none !important;
+          }
+          #reader__camera_selection {
+            background: #1f2937 !important;
+            color: #fff !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+            border-radius: 8px !important;
+            padding: 4px !important;
+            font-size: 11px !important;
+            margin-top: 8px !important;
+            width: 100% !important;
+          }
+        `}</style>
+
+        <div className="grid grid-cols-2 gap-6 items-stretch animate-slide-up">
+          <div className="h-full flex flex-col">
+            <div className={`relative overflow-hidden rounded-[32px] p-8 flex flex-col justify-between border shadow-xl premium-card ${
+              dark 
+                ? 'bg-gradient-to-br from-[#0A1128] to-[#0D1635] border-white/5 hover:border-[#10B981]/30 hover:shadow-[#10B981]/5' 
+                : 'bg-gradient-to-br from-[#064E3B] to-[#022C22] border-white/10 hover:border-[#10B981]/25'
+            }`}>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-[#10B981] opacity-[0.03] rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🏢</span>
+                    <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Wallet Balance</span>
+                  </div>
+                  <span className={`text-[9px] font-extrabold uppercase px-2.5 py-1 rounded bg-[#10B981]/10 ${dark ? 'text-[#34D399]' : 'text-[#059669]'} border border-[#10B981]/20`}>
+                    Corporate Treasury
+                  </span>
+                </div>
+                <h1 className="text-4xl sm:text-5xl font-black tracking-tight text-white mt-8">
+                  {formatXlm(Number(userData.walletBalance || 0))} <span className="text-lg font-bold uppercase text-gray-400">XLM</span>
+                </h1>
+              </div>
+              <div className="mt-8 pt-6 border-t border-white/5 flex items-center justify-between text-xs text-gray-400">
+                <span>Stellar Network Wallet</span>
+                <span className="font-bold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  On-Chain Synchronized
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="h-full flex flex-col">
+            <div className={`rounded-[32px] p-8 border shadow-xl flex-1 flex flex-col justify-between transition-all duration-505 hover:-translate-y-1 hover:shadow-2xl ${
+              dark 
+                ? 'bg-[#0A1128] border-white/5 hover:border-[#10B981]/30 hover:shadow-[#10B981]/5' 
+                : 'bg-white border-[#D5E2EC] hover:border-gray-300'
+            }`}>
+              <div>
+                <h3 className="text-lg font-black mb-2">Pay & Receive</h3>
+                <p className="text-xs text-gray-400 mb-6">Disburse treasury funding or execute P2P transfers</p>
+                <div className="space-y-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1">
+                      <input 
+                        value={recipient} 
+                        onChange={(e) => setRecipient(e.target.value)} 
+                        placeholder="Recipient address, public key or email" 
+                        className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#10B981] hover:border-[#10B981]/40 transition-all`}
+                      />
+                    </div>
+                    <button 
+                      onClick={() => setScanning((s) => !s)} 
+                      className={`px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider border flex items-center justify-center gap-2 whitespace-nowrap active:scale-95 transition-all ${
+                        scanning 
+                          ? 'bg-red-500/10 border-red-500/30 text-red-500' 
+                          : (dark ? 'bg-white/5 border-white/10 text-white hover:bg-white/10 hover:border-white/20' : 'bg-gray-100 border-gray-200 text-gray-800 hover:bg-gray-200')
+                      }`}
+                    >
+                      {scanning ? "Close Cam" : "📷 Scan QR"}
+                    </button>
+                  </div>
+                  <input 
+                    value={amount} 
+                    onChange={(e) => setAmount(e.target.value)} 
+                    type="number" 
+                    placeholder="Amount in XLM" 
+                    className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#10B981] hover:border-[#10B981]/40 transition-all`}
+                  />
+                </div>
+                {scanning && (
+                  <div className="mt-4 text-center">
+                    <div id="reader" className="w-full max-w-[200px] h-[200px] mx-auto rounded-xl overflow-hidden border border-dashed border-[#10B981]/40" />
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2 pt-6 border-t border-dashed border-gray-200 dark:border-white/5 mt-6">
+                <button 
+                  onClick={handleSend} 
+                  disabled={busy} 
+                  className="px-6 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider bg-[#10B981] text-white hover:bg-[#0E9F6E] hover:shadow-lg hover:shadow-[#10B981]/25 disabled:opacity-50 active:scale-95 transition-all"
+                >
+                  Pay
+                </button>
+                <button 
+                  onClick={() => setShowReceiveModal(true)} 
+                  className={`px-5 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+                    dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-850 hover:bg-gray-100'
+                  }`}
+                >
+                  Receive
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`rounded-[32px] p-8 border shadow-xl transition-all duration-505 hover:-translate-y-1 hover:shadow-2xl ${
+          dark 
+            ? 'bg-[#0A1128] border-white/5 hover:border-[#10B981]/30 hover:shadow-[#10B981]/5' 
+            : 'bg-white border-[#D5E2EC] hover:border-gray-300'
+        }`}>
+          <h3 className="text-lg font-black mb-2">Withdraw</h3>
+          <p className="text-xs text-gray-400 mb-4">
+            Withdraw assets to external Stellar exchange terminals. PDAX banking gateway integrations are reserved.
+          </p>
+          <button 
+            onClick={() => alert("Withdraw is reserved for future PDAX integration.")} 
+            className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+              dark ? 'border-white/10 text-white hover:bg-white/5 hover:border-white/20' : 'border-gray-200 text-gray-800 hover:bg-gray-100'
+            }`}
+          >
+            Withdraw
+          </button>
+        </div>
+
+        {/* Bento stats row: Vault & Trust */}
+        <div className="grid grid-cols-2 gap-6">
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-505 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#0A1128] border-white/5 hover:border-[#10B981]/20' : 'bg-white border-[#D5E2EC] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Locked Vault</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {formatXlm(Number(userData.vaultBalance || 0))} XLM
+                </h2>
+              </div>
+              <a href="/user/vault" className={`mt-4 inline-flex items-center gap-1 text-[10px] font-black uppercase hover:underline ${dark ? 'text-[#34D399]' : 'text-[#059669]'}`}>
+                Manage Vault &rarr;
+              </a>
+            </div>
+          </div>
+
+          <div className={`rounded-[28px] p-6 border shadow-xl transition-all duration-505 hover:-translate-y-0.5 hover:shadow-2xl ${
+            dark ? 'bg-[#0A1128] border-white/5 hover:border-[#10B981]/20' : 'bg-white border-[#D5E2EC] hover:border-gray-300'
+          }`}>
+            <div className="flex flex-col justify-between h-full">
+              <div>
+                <span className={`text-[10px] font-black uppercase tracking-wider ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Trust Score</span>
+                <h2 className={`text-2xl font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                  {Number(userData.trustScore || 0)}/100
+                </h2>
+              </div>
+              <p className="mt-4 text-[10px] text-gray-400 leading-relaxed font-semibold">
+                Limit boost: <span className="text-[#34D399]">{formatXlm(availableCredit)} XLM</span>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+
     return (
-        <div style={{ display: "grid", gap: 16 }}>
+        <div className="space-y-6">
+            {/* Processing Loader */}
+            {renderProcessingOverlay()}
+
+            {/* PIN Keyboard Modal */}
+            {showPinModal && renderPinModal()}
+
             {/* Offline Sync Banner */}
             {offlineQueueLength > 0 && (
-                <div style={{ background: dark ? "#1e3a8a33" : "#eff6ff", border: `1px solid ${dark ? "#1e40af4d" : "#bfdbfe"}`, borderRadius: 18, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div className={`border rounded-[28px] p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all duration-300 ${dark ? 'bg-blue-950/20 border-blue-900/30' : 'bg-blue-50 border-blue-100'}`}>
                     <div>
-                        <span style={{ fontSize: 13, fontWeight: 800, color: dark ? "#60a5fa" : "#1d4ed8" }}>📡 Offline Transactions Queued</span>
-                        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>You have {offlineQueueLength} payments waiting to sync.</div>
+                        <span className={`text-sm font-extrabold tracking-wide uppercase flex items-center gap-2 ${dark ? 'text-blue-400' : 'text-blue-800'}`}>
+                          📡 Offline Transactions Queued
+                        </span>
+                        <div className={`text-xs mt-1 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>You have {offlineQueueLength} payments waiting to sync. Connect to network to finalize on-chain.</div>
                     </div>
-                    <PrimaryButton dark={dark} onClick={handleSyncQueue} disabled={busy || !navigator.onLine}>
-                        Sync Queue
-                    </PrimaryButton>
+                    <button 
+                      onClick={handleSyncQueue} 
+                      disabled={busy || !navigator.onLine}
+                      className={`px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider disabled:opacity-50 transition-all ${
+                        role === 'driver' 
+                          ? 'bg-[#FF6B00] text-white hover:bg-[#E05E00]' 
+                          : role === 'cooperative' 
+                            ? 'bg-[#10B981] text-white hover:bg-[#0E9F6E]' 
+                            : 'bg-black text-[#FFE600] dark:bg-[#FFE600] dark:text-black hover:opacity-90'
+                      }`}
+                    >
+                      Sync Queue
+                    </button>
                 </div>
             )}
 
-            <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-                <StatCard dark={dark} title="Wallet Balance" value={`${formatXlm(Number(userData.walletBalance || 0))} XLM`} note="Send, receive, withdraw" />
-                <StatCard dark={dark} title="Vault Balance" value={`${formatXlm(Number(userData.vaultBalance || 0))} XLM`} note="View/Lock on Vault tab" />
-                <StatCard dark={dark} title="Trust Score" value={`${Number(userData.trustScore || 0)}/100`} note={`Credit ceiling ${formatXlm(availableCredit)} XLM`} />
-            </div>
-
-            <div style={{ background: dark ? "#08111f" : "#ffffff", borderRadius: 22, padding: 20, border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}` }}>
-                <h3 style={{ marginTop: 0 }}>Wallet Actions</h3>
-                <div style={{ display: "grid", gap: 12 }}>
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Recipient address, public key or email" style={{ ...inputStyle(dark), flex: 1 }} />
-                        <PrimaryButton dark={dark} ghost onClick={() => setScanning((s) => !s)} style={{ flexShrink: 0 }}>
-                            {scanning ? "Close Cam" : "📷 Scan QR"}
-                        </PrimaryButton>
-                    </div>
-                    <input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" placeholder="Amount in XLM" style={inputStyle(dark)} />
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <PrimaryButton dark={dark} onClick={handleSend} disabled={busy}>Send</PrimaryButton>
-                        <PrimaryButton dark={dark} ghost onClick={() => setShowReceiveModal(true)}>Receive</PrimaryButton>
-                        <PrimaryButton dark={dark} ghost onClick={() => alert("Withdraw is reserved for future PDAX integration.")}>Withdraw</PrimaryButton>
-                    </div>
+            {/* MOBILE VIEW */}
+            <div className="lg:hidden space-y-6 animate-slide-up">
+              {/* Role identity banner for mobile */}
+              <div className={`rounded-[20px] px-4 py-3 flex items-center gap-3 border ${
+                role === 'driver'
+                  ? 'bg-[#FF6B00]/10 border-[#FF6B00]/20'
+                  : role === 'cooperative'
+                    ? 'bg-[#10B981]/10 border-[#10B981]/20'
+                    : 'bg-[#FFE600]/10 border-[#FFE600]/20'
+              }`}>
+                <span className="text-2xl">{role === 'driver' ? '🛺' : role === 'cooperative' ? '🏢' : '💳'}</span>
+                <div>
+                  <div className={`text-[10px] font-black uppercase tracking-widest ${
+                    role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
+                  }`}>{role === 'driver' ? 'Driver Wallet' : role === 'cooperative' ? 'Cooperative Treasury' : 'Commuter Pass'}</div>
+                  <div className={`text-xs font-bold ${dark ? 'text-gray-300' : 'text-gray-700'}`}>{userData?.displayName || userData?.coopName}</div>
                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className={`relative overflow-hidden rounded-[24px] p-6 border shadow-lg flex flex-col justify-between transition-all duration-300 ${
+                  role === 'driver'
+                    ? 'bg-gradient-to-br from-[#14100A] to-[#251A14] border-[#FF6B00]/20'
+                    : role === 'cooperative'
+                      ? 'bg-gradient-to-br from-[#080F14] to-[#0D1A1A] border-[#10B981]/20'
+                      : 'bg-gradient-to-br from-[#0E0F14] to-[#161822] border-[#FFE600]/10'
+                }`}>
+                  <div className={`absolute top-0 right-0 w-32 h-32 rounded-full blur-2xl -mr-8 -mt-8 pointer-events-none opacity-10 ${
+                    role === 'driver' ? 'bg-[#FF6B00]' : role === 'cooperative' ? 'bg-[#10B981]' : 'bg-[#FFE600]'
+                  }`} />
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">Wallet</span>
+                    <h1 className="text-xl sm:text-2xl font-black text-white mt-2">
+                      {formatXlm(Number(userData.walletBalance || 0))}
+                    </h1>
+                  </div>
+                  <div className={`text-[9px] mt-2 font-bold uppercase ${
+                    role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
+                  }`}>XLM Balance</div>
+                </div>
+
+                <div className="grid grid-rows-2 gap-3">
+                  <button 
+                    onClick={() => setShowPayModal(true)} 
+                    className={`flex items-center justify-center p-4 rounded-[20px] border active:scale-95 transition-all gap-2 font-black text-xs uppercase tracking-wider shadow-md ${
+                        role === 'driver' 
+                          ? 'border-[#FF6B00]/20 bg-[#FF6B00] text-white' 
+                          : role === 'cooperative' 
+                            ? 'border-[#10B981]/20 bg-[#10B981] text-white' 
+                            : 'border-[#FFE600]/20 bg-[#FFE600] text-black'
+                    }`}
+                  >
+                    💸 Pay
+                  </button>
+                  <button 
+                    onClick={() => setShowReceiveModal(true)} 
+                    className={`flex items-center justify-center p-4 rounded-[20px] border active:scale-95 transition-all gap-2 font-black text-xs uppercase tracking-wider shadow-md ${
+                      dark ? 'border-white/10 bg-white/5 text-white' : 'border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100'
+                    }`}
+                  >
+                    📥 Receive
+                  </button>
+                </div>
+              </div>
+
+              <div className={`rounded-[24px] p-6 border shadow-md transition-all duration-300 ${dark ? 'bg-[#0E0F14] border-white/5' : 'bg-white border-[#E2E2DF]'}`}>
+                <h3 className="text-sm font-black mb-1">Withdraw</h3>
+                <p className="text-[10px] text-gray-400 mb-4">Withdraw to external Stellar exchange terminals.</p>
+                <button 
+                  onClick={() => alert("Withdraw is reserved for future PDAX integration.")} 
+                  className={`w-full py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider border active:scale-95 transition-all ${
+                    dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-800'
+                  }`}
+                >
+                  Withdraw
+                </button>
+              </div>
+
+              {/* Mobile Bento stats grid: Locked savings & Trust Delta */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className={`rounded-[20px] p-4 border shadow-sm ${
+                  role === 'driver'
+                    ? (dark ? 'bg-[#14100A] border-[#FF6B00]/15' : 'bg-white border-[#EAE6DF]')
+                    : role === 'cooperative'
+                      ? (dark ? 'bg-[#080F14] border-[#10B981]/15' : 'bg-white border-[#D5E2EC]')
+                      : (dark ? 'bg-[#0E0F14] border-[#FFE600]/10' : 'bg-white border-[#E2E2DF]')
+                }`}>
+                  <span className="text-[8px] font-black uppercase text-gray-400">🔒 Locked Vault</span>
+                  <p className={`text-sm font-black mt-1 ${
+                    role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
+                  }`}>{formatXlm(Number(userData.vaultBalance || 0))} XLM</p>
+                </div>
+                <div className={`rounded-[20px] p-4 border shadow-sm ${
+                  role === 'driver'
+                    ? (dark ? 'bg-[#14100A] border-[#FF6B00]/15' : 'bg-white border-[#EAE6DF]')
+                    : role === 'cooperative'
+                      ? (dark ? 'bg-[#080F14] border-[#10B981]/15' : 'bg-white border-[#D5E2EC]')
+                      : (dark ? 'bg-[#0E0F14] border-[#FFE600]/10' : 'bg-white border-[#E2E2DF]')
+                }`}>
+                  <span className="text-[8px] font-black uppercase text-gray-400">⭐ Trust Score</span>
+                  <p className="text-sm font-black mt-1 text-emerald-500">+{Number(userData.trustScore || 0)} pts</p>
+                </div>
+              </div>
             </div>
 
-            {/* QR Code Scanner Overlay */}
-            {scanning && (
-                <div style={{ background: dark ? "#08111f" : "#ffffff", borderRadius: 22, padding: 20, border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, textAlign: "center" }}>
-                    <h4 style={{ marginTop: 0, marginBottom: 12 }}>Scanning QR Code...</h4>
-                    <div id="reader" style={{ width: "100%", maxWidth: 300, height: 300, margin: "0 auto", borderRadius: 14, overflow: "hidden", border: "1px dashed #10b981" }} />
+            {/* LAPTOP / DESKTOP VIEW */}
+            <div className="hidden lg:block">
+              {role === "driver" ? renderDriver() : role === "cooperative" ? renderCooperative() : renderCommuter()}
+            </div>
+
+            {/* Mobile PWA Pay Modal */}
+            {showPayModal && (
+                <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] p-6">
+                    <div className={`rounded-[32px] p-8 max-w-sm w-full border shadow-2xl transition-all ${dark ? 'bg-[#0E0F14] border-white/10 text-white' : 'bg-white border-gray-100 text-gray-900'}`}>
+                        <h3 className="text-lg font-black mb-1">Pay</h3>
+                        <p className="text-xs text-gray-400 mb-6">Transfer XLM or scan fare receiver codes</p>
+
+                        <div className="space-y-4 mb-6">
+                            <div className="flex gap-2">
+                                <input 
+                                    value={recipient} 
+                                    onChange={(e) => setRecipient(e.target.value)} 
+                                    placeholder="Recipient address or email" 
+                                    className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 ${
+                                        role === 'driver' ? 'focus:ring-[#FF6B00]' : role === 'cooperative' ? 'focus:ring-[#10B981]' : 'focus:ring-[#FFE600]'
+                                    } transition-all`} 
+                                />
+                                <button 
+                                    onClick={() => setScanning((s) => !s)} 
+                                    className={`px-3 py-2 rounded-xl font-bold text-xs uppercase tracking-wider border flex items-center justify-center gap-1 active:scale-95 transition-all ${scanning ? 'bg-red-500/10 border-red-500/30 text-red-500' : (dark ? 'bg-white/5 border-white/10 text-white' : 'bg-gray-100 border-gray-200')}`}
+                                >
+                                    📷 {scanning ? "Close" : "Scan"}
+                                </button>
+                            </div>
+
+                            <input 
+                                value={amount} 
+                                onChange={(e) => setAmount(e.target.value)} 
+                                type="number" 
+                                placeholder="Amount in XLM" 
+                                className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 ${
+                                    role === 'driver' ? 'focus:ring-[#FF6B00]' : role === 'cooperative' ? 'focus:ring-[#10B981]' : 'focus:ring-[#FFE600]'
+                                } transition-all`} 
+                            />
+                        </div>
+
+                        {scanning && (
+                            <div className="mb-4 text-center">
+                                <div id="reader" className="w-full max-w-[200px] h-[200px] mx-auto rounded-xl overflow-hidden border border-dashed border-[#10b981]" />
+                            </div>
+                        )}
+
+                        <div className="flex gap-3">
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider text-white transition-all ${
+                                role === 'driver' 
+                                  ? 'bg-[#FF6B00] hover:bg-[#E05E00]' 
+                                  : role === 'cooperative' 
+                                    ? 'bg-[#10B981] hover:bg-[#0E9F6E]' 
+                                    : 'bg-[#FFE600] text-black hover:bg-[#E6CE00]'
+                              }`}
+                              onClick={async () => {
+                                if (!recipient || !amount || Number(amount) <= 0) return alert("Please enter valid recipient and amount.");
+                                setShowPayModal(false);
+                                await handleSend();
+                              }} 
+                              disabled={busy}
+                            >
+                                {busy ? "Paying..." : "Pay"}
+                            </button>
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all ${dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-855 hover:bg-gray-50'}`}
+                              onClick={() => {
+                                setShowPayModal(false);
+                                setScanning(false);
+                              }}
+                            >
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
 
             {/* Receive QR Modal */}
-            {showReceiveModal && (
-                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-                    <div style={{ background: dark ? "#111827" : "#ffffff", color: dark ? "#f8fafc" : "#111827", borderRadius: 24, padding: 24, maxWidth: 320, width: "90%", textAlign: "center" }}>
-                        <h3 style={{ marginTop: 0 }}>Receive Payment</h3>
-                        <OfflineQrCanvas text={userData.publicKey || userData.uid || ""} size={200} />
-                        <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.8, marginBottom: 16 }}>{userData.publicKey}</div>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            <PrimaryButton dark={dark} style={{ flex: "1 1 auto", fontSize: 12, padding: "8px 12px" }} onClick={() => {
-                                navigator.clipboard.writeText(userData.publicKey);
-                                alert("Public key copied to clipboard!");
-                            }}>Copy Key</PrimaryButton>
-                            <PrimaryButton dark={dark} style={{ flex: "1 1 auto", fontSize: 12, padding: "8px 12px" }} onClick={handleDownloadQr}>Download</PrimaryButton>
-                            <PrimaryButton dark={dark} ghost style={{ flex: "1 1 auto", fontSize: 12, padding: "8px 12px" }} onClick={() => setShowReceiveModal(false)}>Close</PrimaryButton>
+            {showReceiveModal && (() => {
+                const rcfg = {
+                    commuter:    { border: "border-[#FFE600]/30", badge: "bg-[#FFE600]/10 text-[#FFE600] border-[#FFE600]/20", btn: "bg-[#FFE600] text-black hover:bg-[#E6CE00]", label: "Commuter Pass", ring: "#FFE600", topBar: "bg-[#FFE600]" },
+                    driver:      { border: "border-[#FF6B00]/30", badge: "bg-[#FF6B00]/10 text-[#FF6B00] border-[#FF6B00]/20", btn: "bg-[#FF6B00] text-white hover:bg-[#E05E00]", label: "Driver Wallet", ring: "#FF6B00", topBar: "bg-[#FF6B00]" },
+                    cooperative: { border: "border-[#10B981]/30", badge: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20", btn: "bg-[#10B981] text-white hover:bg-[#0E9F6E]", label: "Coop Treasury", ring: "#10B981", topBar: "bg-[#10B981]" },
+                };
+                const rc = rcfg[role as keyof typeof rcfg] || rcfg.commuter;
+                return (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[9999] p-6">
+                    <div className={`rounded-[32px] w-full max-w-sm text-center border-2 shadow-2xl overflow-hidden ${dark ? 'bg-[#0C0D12] text-white' : 'bg-white text-gray-900'} ${rc.border}`}>
+                        {/* Role identity top bar */}
+                        <div className={`h-1.5 w-full ${rc.topBar}`} />
+                        <div className="p-8">
+                            {/* Header row */}
+                            <div className="flex items-center justify-between mb-5">
+                                <div className="text-left">
+                                    <h3 className="text-xl font-black">Receive Payment</h3>
+                                    <p className={`text-[10px] font-bold uppercase tracking-wider mt-0.5 ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Share your address</p>
+                                </div>
+                                <span className={`text-[9px] font-extrabold uppercase px-2.5 py-1 rounded-full border ${rc.badge}`}>{rc.label}</span>
+                            </div>
+
+                            {/* QR Card preview */}
+                            <div className={`rounded-[24px] p-5 mb-4 border ${dark ? 'bg-white/3 border-white/5' : 'bg-gray-50 border-gray-100'}`}>
+                                <OfflineQrCanvas text={userData.publicKey || userData.uid || ""} size={200} />
+                                <div className={`text-[9px] font-black uppercase tracking-wider mb-2 ${dark ? 'text-gray-500' : 'text-gray-400'}`}>
+                                    {userData?.displayName || userData?.coopName || "Aranova User"}
+                                </div>
+                                <div className={`text-[10px] font-mono break-all px-3 py-2 rounded-xl ${dark ? 'bg-black/40 text-gray-400' : 'bg-white text-gray-500 border border-gray-100'}`}>
+                                    {(userData.publicKey || "").slice(0, 16)}…{(userData.publicKey || "").slice(-16)}
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2">
+                                <button 
+                                  className={`flex-1 py-3 rounded-xl font-black text-xs uppercase tracking-wider transition-all active:scale-95 ${rc.btn}`}
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(userData.publicKey);
+                                    alert("Public key copied to clipboard!");
+                                  }}
+                                >
+                                  Copy Key
+                                </button>
+                                <button 
+                                  className={`flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all active:scale-95 ${dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}
+                                  onClick={handleDownloadQr}
+                                >
+                                  💾 Download
+                                </button>
+                                <button 
+                                  className={`flex-1 py-3 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all active:scale-95 ${dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-700 hover:bg-gray-50'}`}
+                                  onClick={() => setShowReceiveModal(false)}
+                                >
+                                  Close
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
-            )}
+                );
+            })()}
 
             {/* Payment Receipt / Confirmation Modal */}
             {activeReceipt && (
-                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-                    <div style={{ background: dark ? "#111827" : "#ffffff", color: dark ? "#f8fafc" : "#111827", borderRadius: 24, padding: 24, maxWidth: 380, width: "90%", border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, textAlign: "left" }}>
-                        <div style={{ textAlign: "center", marginBottom: 20 }}>
-                            <div style={{ width: 56, height: 56, borderRadius: "50%", background: "#10b981", color: "#ffffff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 12px" }}>✓</div>
-                            <h3 style={{ marginTop: 0, marginBottom: 4 }}>Transaction Receipt</h3>
-                            <div style={{ color: "#10b981", fontWeight: 800, fontSize: 24 }}>{activeReceipt.amount} XLM</div>
-                            <div style={{ fontSize: 12, opacity: 0.6 }}>{activeReceipt.type}</div>
+                <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] p-6">
+                    <div className={`rounded-[32px] p-8 max-w-md w-full border shadow-2xl transition-all ${dark ? 'bg-[#0E0F14] border-white/10 text-white' : 'bg-white border-gray-100 text-gray-900'}`}>
+                        <div className="text-center mb-6">
+                            <div className="w-16 h-16 rounded-full bg-emerald-500 text-white flex items-center justify-center text-3xl font-bold mx-auto mb-4 shadow-lg shadow-emerald-500/20">✓</div>
+                            <h3 className="text-xl font-black mb-1">Receipt</h3>
+                            <div className="text-emerald-500 font-black text-3xl">{activeReceipt.amount} XLM</div>
+                            <div className={`text-xs mt-1 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>{activeReceipt.type}</div>
                         </div>
 
-                        <div style={{ display: "grid", gap: 12, fontSize: 13, borderTop: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, borderBottom: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, padding: "16px 0", marginBottom: 20 }}>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span style={{ opacity: 0.6 }}>Status:</span>
-                                <span style={{ fontWeight: 700, color: "#10b981" }}>{activeReceipt.status}</span>
+                        <div className={`divide-y text-xs border-y py-4 my-6 ${dark ? 'divide-white/5 border-white/5' : 'divide-gray-100 border-gray-200'}`}>
+                            <div className="flex justify-between py-2.5">
+                                <span className={dark ? 'text-gray-500' : 'text-gray-400'}>Status:</span>
+                                <span className="font-extrabold text-emerald-500 uppercase tracking-wider">{activeReceipt.status}</span>
                             </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                                <span style={{ opacity: 0.6, flexShrink: 0 }}>Sender:</span>
-                                <span style={{ wordBreak: "break-all", textAlign: "right" }}>{activeReceipt.sender.slice(0, 10)}...{activeReceipt.sender.slice(-10)}</span>
+                            <div className="flex justify-between py-2.5 gap-4">
+                                <span className={`shrink-0 ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Sender:</span>
+                                <span className="font-mono break-all text-right">{activeReceipt.sender.slice(0, 12)}...{activeReceipt.sender.slice(-12)}</span>
                             </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                                <span style={{ opacity: 0.6, flexShrink: 0 }}>Recipient:</span>
-                                <span style={{ wordBreak: "break-all", textAlign: "right" }}>{activeReceipt.recipient.slice(0, 10)}...{activeReceipt.recipient.slice(-10)}</span>
+                            <div className="flex justify-between py-2.5 gap-4">
+                                <span className={`shrink-0 ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Recipient:</span>
+                                <span className="font-mono break-all text-right">{activeReceipt.recipient.slice(0, 12)}...{activeReceipt.recipient.slice(-12)}</span>
                             </div>
-                            <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                <span style={{ opacity: 0.6 }}>Date/Time:</span>
-                                <span>{new Date(activeReceipt.timestamp).toLocaleString()}</span>
+                            <div className="flex justify-between py-2.5">
+                                <span className={dark ? 'text-gray-500' : 'text-gray-500'}>Date/Time:</span>
+                                <span className="font-semibold">{new Date(activeReceipt.timestamp).toLocaleString()}</span>
                             </div>
                             {activeReceipt.txHash && (
-                                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-                                    <span style={{ opacity: 0.6, flexShrink: 0 }}>Tx Hash:</span>
-                                    <span style={{ wordBreak: "break-all", fontSize: 11, textAlign: "right" }}>{activeReceipt.txHash.slice(0, 12)}...</span>
+                                <div className="flex justify-between py-2.5 gap-4">
+                                    <span className={`shrink-0 ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Tx Hash:</span>
+                                    <span className="font-mono break-all text-right text-[10px] text-gray-500">{activeReceipt.txHash.slice(0, 16)}...</span>
                                 </div>
                             )}
                             {activeReceipt.nonce && (
-                                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                                    <span style={{ opacity: 0.6 }}>Offline Nonce:</span>
-                                    <span>{activeReceipt.nonce}</span>
+                                <div className="flex justify-between py-2.5">
+                                    <span className={dark ? 'text-gray-500' : 'text-gray-400'}>Offline Nonce:</span>
+                                    <span className="font-mono">{activeReceipt.nonce}</span>
                                 </div>
                             )}
                             {activeReceipt.payload && (
-                                <div style={{ textAlign: "center", marginTop: 12, borderTop: `1px solid ${dark ? "#334155" : "#cbd5e1"}`, paddingTop: 12 }}>
-                                    <div style={{ fontSize: 11, color: "#eab308", marginBottom: 6, fontWeight: 700 }}>⚠️ Offline Pay: Have driver scan this QR code:</div>
+                                <div className="text-center pt-4 border-t border-dashed mt-2">
+                                    <div className="text-xs font-bold text-amber-500 mb-2">⚠️ Offline Pay: Have driver scan this QR code:</div>
                                     <OfflineQrCanvas text={typeof activeReceipt.payload === "string" ? activeReceipt.payload : JSON.stringify(activeReceipt.payload)} size={180} />
                                 </div>
                             )}
                         </div>
 
-                        <div style={{ display: "flex", gap: 10 }}>
-                            <PrimaryButton dark={dark} style={{ flex: 1 }} onClick={() => window.print()}>Print Receipt</PrimaryButton>
-                            <PrimaryButton dark={dark} ghost style={{ flex: 1 }} onClick={() => setActiveReceipt(null)}>Close</PrimaryButton>
+                        <div className="flex gap-3">
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white transition-all ${
+                                role === 'driver' 
+                                  ? 'bg-[#FF6B00] hover:bg-[#E05E00]' 
+                                  : role === 'cooperative' 
+                                    ? 'bg-[#10B981] hover:bg-[#0E9F6E]' 
+                                    : 'bg-black dark:bg-[#FFE600] dark:text-black hover:opacity-90'
+                              }`} 
+                              onClick={() => window.print()}
+                            >
+                              Print
+                            </button>
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all ${dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-800'}`} 
+                              onClick={() => setActiveReceipt(null)}
+                            >
+                              Close
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -661,43 +1817,56 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
 
             {/* Scanned Confirm Payment Modal */}
             {scannedRecipient && (
-                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.75)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
-                    <div style={{ background: dark ? "#111827" : "#ffffff", color: dark ? "#f8fafc" : "#111827", borderRadius: 24, padding: 24, maxWidth: 360, width: "90%", border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`, textAlign: "left" }}>
-                        <h3 style={{ marginTop: 0 }}>Confirm Payment</h3>
+                <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-[9999] p-6">
+                    <div className={`rounded-[32px] p-8 max-w-sm w-full border shadow-2xl transition-all ${dark ? 'bg-[#0E0F14] border-white/10 text-white' : 'bg-white border-gray-100 text-gray-900'}`}>
+                        <h3 className="text-xl font-black mb-4">Pay</h3>
                         
-                        <div style={{ marginBottom: 16 }}>
-                            <div style={{ fontSize: 11, opacity: 0.6, textTransform: "uppercase", fontWeight: 700 }}>Recipient:</div>
-                            <div style={{ fontSize: 16, fontWeight: 800, color: "#4F8EF7" }}>{recipientName}</div>
-                            <div style={{ fontSize: 11, wordBreak: "break-all", opacity: 0.6 }}>{scannedRecipient}</div>
+                        <div className="mb-4 text-xs">
+                            <div className={dark ? 'text-gray-500' : 'text-gray-400'}>Recipient:</div>
+                            <div className={`text-base font-extrabold mt-0.5 ${role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#8A7D00] dark:text-[#FFE600]'}`}>{recipientName}</div>
+                            <div className="font-mono break-all text-gray-500 mt-1">{scannedRecipient}</div>
                         </div>
 
-                        <div style={{ marginBottom: 20 }}>
-                            <label style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, display: "block" }}>Payment Amount (XLM):</label>
+                        <div className="mb-6">
+                            <label className="block text-xs font-bold mb-2 uppercase text-gray-400">Payment Amount (XLM):</label>
                             <input 
                                 value={amount} 
                                 onChange={(e) => setAmount(e.target.value)} 
                                 type="number" 
                                 placeholder="0.00" 
-                                style={inputStyle(dark)} 
+                                className={`w-full ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'} px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all`} 
                                 autoFocus 
                             />
                         </div>
 
-                        <div style={{ display: "flex", gap: 10 }}>
-                            <PrimaryButton dark={dark} style={{ flex: 1 }} onClick={async () => {
+                        <div className="flex gap-3">
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider text-white transition-all ${
+                                role === 'driver' 
+                                  ? 'bg-[#FF6B00] hover:bg-[#E05E00]' 
+                                  : role === 'cooperative' 
+                                    ? 'bg-[#10B981] hover:bg-[#0E9F6E]' 
+                                    : 'bg-[#FFE600] text-black hover:bg-[#E6CE00]'
+                              }`}
+                              onClick={async () => {
                                 if (!amount || Number(amount) <= 0) return alert("Please enter a valid amount.");
                                 setScannedRecipient(null);
                                 await handleSend();
-                            }} disabled={busy}>
-                                {busy ? "Sending..." : "Send Payment"}
-                            </PrimaryButton>
-                            <PrimaryButton dark={dark} ghost style={{ flex: 1 }} onClick={() => {
+                              }} 
+                              disabled={busy}
+                            >
+                                {busy ? "Paying..." : "Pay"}
+                            </button>
+                            <button 
+                              className={`flex-1 py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all ${dark ? 'border-white/10 text-white hover:bg-white/5' : 'border-gray-200 text-gray-850'}`}
+                              onClick={() => {
                                 setScannedRecipient(null);
                                 setRecipient("");
-                                setAmount("");
-                            }}>
-                                Cancel
-                            </PrimaryButton>
+                                setAmount("0");
+                              }}
+                            >
+                              Cancel
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -708,6 +1877,7 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
 
 const UserDashboard: React.FC = () => {
     const [activeTab, setActiveTab] = useState("wallet");
+    const { currentUser, userData: authUserData, loading: globalAuthLoading } = useAuth();
     const [userData, setUserData] = useState<any>(null);
     const [authLoading, setAuthLoading] = useState(true);
     const navigate = useNavigate();
@@ -717,6 +1887,7 @@ const UserDashboard: React.FC = () => {
         if (snap.exists()) {
             const data = snap.data() as any;
             let liveBalance = data.walletBalance;
+            let liveVault = data.vaultBalance;
             if (data.publicKey) {
                 try {
                     const stellarBal = await getLiveStellarBalance(data.publicKey);
@@ -727,49 +1898,117 @@ const UserDashboard: React.FC = () => {
                 } catch (e) {
                     console.warn("Could not sync live Stellar balance:", e);
                 }
+                try {
+                    const vaultBalBig = await getVaultBalanceOnChain(data.publicKey);
+                    const onChainVault = Number(vaultBalBig) / 10_000_000;
+                    if (onChainVault >= 0 && onChainVault !== Number(data.vaultBalance || 0)) {
+                        await updateDoc(doc(db, "users", uid), { vaultBalance: onChainVault });
+                        liveVault = onChainVault;
+                    }
+                } catch (e) {
+                    console.warn("Could not sync live on-chain vault balance:", e);
+                }
             }
-            setUserData({ uid, ...data, walletBalance: liveBalance });
+            setUserData({ uid, ...data, walletBalance: liveBalance, vaultBalance: liveVault });
         }
     };
 
     useEffect(() => {
-        const unsubscribe = auth.onAuthStateChanged(async (user) => {
-            if (!user) {
-                navigate("/auth");
-                return;
+        if (globalAuthLoading) return;
+        if (!currentUser) {
+            navigate("/auth");
+            return;
+        }
+
+        let isMounted = true;
+
+        const initializeUser = async () => {
+            let profile;
+            try {
+                profile = await ensureUserProfile(currentUser);
+            } catch (err) {
+                console.warn("Retrying profile initialization due to timing/permission constraint...", err);
+                profile = authUserData || { uid: currentUser.uid, approved: true };
             }
 
-            const profile = (await ensureUserProfile(user)) as any;
             if (profile.publicKey) {
                 try {
                     const stellarBal = await getLiveStellarBalance(profile.publicKey);
                     if (Number(stellarBal) !== Number(profile.walletBalance)) {
-                        await updateDoc(doc(db, "users", user.uid), { walletBalance: Number(stellarBal) });
+                        await updateDoc(doc(db, "users", currentUser.uid), { walletBalance: Number(stellarBal) });
                         profile.walletBalance = Number(stellarBal);
                     }
                 } catch (e) {
                     console.warn("Could not sync initial live Stellar balance:", e);
                 }
+                try {
+                    const vaultBalBig = await getVaultBalanceOnChain(profile.publicKey);
+                    const onChainVault = Number(vaultBalBig) / 10_000_000;
+                    if (onChainVault >= 0 && onChainVault !== Number(profile.vaultBalance || 0)) {
+                        await updateDoc(doc(db, "users", currentUser.uid), { vaultBalance: onChainVault });
+                        profile.vaultBalance = onChainVault;
+                    }
+                } catch (e) {
+                    console.warn("Could not sync initial live on-chain vault balance:", e);
+                }
             }
-            setUserData(profile);
-            setAuthLoading(false);
-            maybeRunDailyTrustUpdate(profile).catch(() => undefined);
 
-            const userUnsub = onSnapshot(doc(db, "users", user.uid), (snap) => {
-                if (snap.exists()) setUserData({ uid: user.uid, ...snap.data() });
-            }, (err) => console.warn("User profile snapshot error:", err));
+            if (isMounted) {
+                setUserData(profile);
+                setAuthLoading(false);
+                maybeRunDailyTrustUpdate(profile).catch(() => undefined);
+            }
+        };
 
-            return () => userUnsub();
-        });
+        initializeUser();
 
-        return () => unsubscribe();
-    }, [navigate]);
+        const userUnsub = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
+            if (snap.exists() && isMounted) {
+                setUserData({ uid: currentUser.uid, ...snap.data() });
+            }
+        }, (err) => console.warn("User profile snapshot error:", err));
+
+        return () => {
+            isMounted = false;
+            userUnsub();
+        };
+    }, [globalAuthLoading, currentUser, navigate, authUserData]);
 
     useEffect(() => {
         if (!userData?.uid) return;
         syncBluetoothQueue(userData.uid).catch(() => undefined);
         syncReceivedOfflinePayments(userData.uid).catch(() => undefined);
     }, [userData?.uid]);
+
+    useEffect(() => {
+        if (!userData?.publicKey) return;
+
+        const syncLiveOnChainBalances = async () => {
+            try {
+                const stellarBal = await getLiveStellarBalance(userData.publicKey);
+                const vaultBalBig = await getVaultBalanceOnChain(userData.publicKey);
+                const onChainVault = Number(vaultBalBig) / 10_000_000;
+
+                setUserData((prev: any) => {
+                    if (!prev) return prev;
+                    if (Number(stellarBal) !== Number(prev.walletBalance) || onChainVault !== Number(prev.vaultBalance)) {
+                        updateDoc(doc(db, "users", prev.uid), {
+                            walletBalance: Number(stellarBal),
+                            vaultBalance: onChainVault
+                        }).catch(() => undefined);
+                        return { ...prev, walletBalance: Number(stellarBal), vaultBalance: onChainVault };
+                    }
+                    return prev;
+                });
+            } catch (e) {
+                // Fail silently
+            }
+        };
+
+        // Check on-chain balance every 15s to guarantee absolute data integrity
+        const timer = setInterval(syncLiveOnChainBalances, 15000);
+        return () => clearInterval(timer);
+    }, [userData?.publicKey]);
 
     if (authLoading || !userData) return <LoadingWorkspace message="Loading Aranova workspace..." />;
     if (userData.approved === false) return <LoadingWorkspace message="Verification pending..." />;

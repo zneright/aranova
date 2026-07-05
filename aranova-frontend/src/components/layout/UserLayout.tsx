@@ -1,19 +1,6 @@
-import React, { useState, useEffect, useRef, createContext, useContext } from "react";
-
-// ---------------------------------------------------------------------------
-// Dark Mode Context
-// ---------------------------------------------------------------------------
-interface ThemeContextType {
-  dark: boolean;
-  toggleDark: () => void;
-}
-
-export const ThemeContext = createContext<ThemeContextType>({
-  dark: false,
-  toggleDark: () => { },
-});
-
-export const useTheme = () => useContext(ThemeContext);
+import React, { useState, useEffect, useRef } from "react";
+import AnnouncementBell from "../ui/AnnouncementBell";
+import { useTheme } from "../../contexts/ThemeContext";
 
 // ---------------------------------------------------------------------------
 // SVG Icon Components
@@ -60,7 +47,7 @@ interface UserLayoutProps {
 }
 
 const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet", userData }) => {
-  const [dark, setDark] = useState(false);
+  const { dark, toggleDark } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -106,24 +93,68 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
 
   const toggleSidebar = () => setSidebarOpen((v) => !v);
 
-  const t = {
-    bgPage: dark ? "#0F1117" : "#F8F9FA",
-    bgCard: dark ? "#1A1D27" : "#ffffff",
-    bgHeader: dark ? "#13151F" : "#ffffff",
-    bgSidebar: dark ? "#13151F" : "#ffffff",
-    border: dark ? "#2A2D3A" : "#E5E7EB",
-    textPrim: dark ? "#F1F5F9" : "#111827",
-    textMuted: dark ? "#94A3B8" : "#6B7280",
-    textFaint: dark ? "#475569" : "#9CA3AF",
-    blue: dark ? "#4F8EF7" : "#1652C9",
-    blue50: dark ? "#1A2644" : "#EEF4FF",
-    blueText: dark ? "#7DB3FF" : "#1652C9",
-    greenBg: dark ? "#052E16" : "#F0FDF4",
-    greenText: dark ? "#4ADE80" : "#15803D",
-    greenBrd: dark ? "#166534" : "#BBF7D0",
+  const role = userData?.role || "commuter";
+
+  const getThemeColors = (userRole: string, isDark: boolean) => {
+    switch (userRole) {
+      case "driver":
+        return {
+          bgPage: isDark ? "#0A0B0E" : "#FAF8F5",
+          bgCard: isDark ? "#141620" : "#ffffff",
+          bgHeader: isDark ? "rgba(10, 11, 14, 0.75)" : "rgba(255, 255, 255, 0.75)",
+          bgSidebar: isDark ? "#0E0F14" : "#ffffff",
+          border: isDark ? "rgba(255,255,255,0.06)" : "#EAE6DF",
+          textPrim: isDark ? "#F5F3F0" : "#1F1D1A",
+          textMuted: isDark ? "#9C9AA8" : "#7C776E",
+          textFaint: isDark ? "#5D5C6B" : "#B2ADA1",
+          accent: "#FF6B00",
+          accentLight: isDark ? "rgba(255, 107, 0, 0.1)" : "rgba(255, 107, 0, 0.05)",
+          accentText: isDark ? "#FF8833" : "#D45600",
+          greenBg: isDark ? "rgba(16, 185, 129, 0.1)" : "#ECFDF5",
+          greenText: isDark ? "#34D399" : "#047857",
+          greenBrd: isDark ? "rgba(16, 185, 129, 0.2)" : "#A7F3D0",
+        };
+      case "cooperative":
+        return {
+          bgPage: isDark ? "#040814" : "#F4F7F9",
+          bgCard: isDark ? "#0A1128" : "#ffffff",
+          bgHeader: isDark ? "rgba(4, 8, 20, 0.75)" : "rgba(255, 255, 255, 0.75)",
+          bgSidebar: isDark ? "#060D1E" : "#ffffff",
+          border: isDark ? "rgba(255,255,255,0.06)" : "#D5E2EC",
+          textPrim: isDark ? "#E6F1FA" : "#0F1A30",
+          textMuted: isDark ? "#8295B4" : "#506784",
+          textFaint: isDark ? "#4F6484" : "#98AEC6",
+          accent: "#10B981",
+          accentLight: isDark ? "rgba(16, 185, 129, 0.1)" : "rgba(16, 185, 129, 0.05)",
+          accentText: isDark ? "#34D399" : "#059669",
+          greenBg: isDark ? "rgba(16, 185, 129, 0.1)" : "#ECFDF5",
+          greenText: isDark ? "#34D399" : "#059669",
+          greenBrd: isDark ? "rgba(16, 185, 129, 0.2)" : "#A7F3D0",
+        };
+      case "commuter":
+      default:
+        return {
+          bgPage: isDark ? "#050608" : "#FBFBFA",
+          bgCard: isDark ? "#0E0F14" : "#ffffff",
+          bgHeader: isDark ? "rgba(5, 6, 8, 0.75)" : "rgba(255, 255, 255, 0.75)",
+          bgSidebar: isDark ? "#08090C" : "#ffffff",
+          border: isDark ? "rgba(255,255,255,0.05)" : "#E2E2DF",
+          textPrim: isDark ? "#F3F4F6" : "#0B0C10",
+          textMuted: isDark ? "#9CA3AF" : "#555A64",
+          textFaint: isDark ? "#4B5563" : "#A3A7AF",
+          accent: "#FFE600",
+          accentLight: isDark ? "rgba(255, 230, 0, 0.08)" : "rgba(255, 230, 0, 0.06)",
+          accentText: isDark ? "#FFE600" : "#8A7D00",
+          greenBg: isDark ? "rgba(16, 185, 129, 0.1)" : "#ECFDF5",
+          greenText: isDark ? "#34D399" : "#059669",
+          greenBrd: isDark ? "rgba(16, 185, 129, 0.2)" : "#A7F3D0",
+        };
+    }
   };
 
-  const sidebarW = 240;
+  const t = getThemeColors(role, dark);
+
+  const sidebarW = 260;
 
   const NavLink = ({ item }: { item: NavItem }) => {
     const isActive = activeTab === item.key;
@@ -135,11 +166,12 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         style={{
-          display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderRadius: 12,
+          display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 16,
           fontWeight: isActive ? 700 : 600, fontSize: 14, textDecoration: "none",
-          color: isActive ? t.blueText : (isHovered ? t.textPrim : t.textMuted),
-          background: isActive ? t.blue50 : (isHovered ? (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)") : "transparent"),
-          transition: "all 0.2s ease", transform: isHovered && !isActive ? "translateX(4px)" : "none",
+          color: isActive ? (role === "commuter" && !dark ? "#0B0C10" : t.accentText) : (isHovered ? t.textPrim : t.textMuted),
+          background: isActive ? (role === "commuter" ? t.accent : t.accentLight) : (isHovered ? (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.02)") : "transparent"),
+          transition: "all 0.2s ease-out", transform: isHovered && !isActive ? "translateX(4px)" : "none",
+          border: isActive && role === "commuter" ? "1px solid rgba(0,0,0,0.05)" : "1px solid transparent"
         }}
       >
         {item.icon} {item.label}
@@ -148,34 +180,52 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
   };
 
   return (
-    <ThemeContext.Provider value={{ dark, toggleDark: () => setDark((d) => !d) }}>
+    <>
       {/* NATIVE SCROLL LAYOUT WRAPPER */}
-      <div style={{ minHeight: "100vh", background: t.bgPage, color: t.textPrim, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", display: "flex", flexDirection: "column", paddingBottom: isMobile ? 80 : 0 }}>
+      <div style={{ 
+        minHeight: "100vh", background: t.bgPage, color: t.textPrim, display: "flex", flexDirection: "column",
+        "--role-accent-rgb": role === "driver" ? "255, 107, 0" : role === "cooperative" ? "16, 185, 129" : "255, 230, 0" 
+      } as React.CSSProperties}>
 
         {/* ── HEADER ─────────────────────────────────────────────────────── */}
         <header
           style={{
             height: 64, background: t.bgHeader, borderBottom: `1px solid ${t.border}`,
             display: "flex", alignItems: "center", justifyContent: "space-between",
-            padding: "0 24px", position: "sticky", top: 0, zIndex: 100, flexShrink: 0
+            padding: "0 24px", position: "sticky", top: 0, zIndex: 100, flexShrink: 0,
+            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+            position: "relative" as const
           }}
         >
+          {/* Role-specific top accent stripe */}
+          <div style={{
+            position: "absolute", top: 0, left: 0, right: 0, height: 3,
+            background: role === "driver" ? "linear-gradient(90deg, #FF6B00, #FF8833)" : role === "cooperative" ? "linear-gradient(90deg, #10B981, #34D399)" : "linear-gradient(90deg, #FFE600, #FFEE55)",
+            zIndex: 1,
+          }} />
           {/* Left: burger + logo */}
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             {!isMobile && (
               <button
                 onClick={toggleSidebar}
-                style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: t.textMuted }}
+                style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 12, width: 36, height: 36, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: t.textMuted, transition: "all 0.2s" }}
               >
                 <IconMenu />
               </button>
             )}
             <a href="/user" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: t.blue50, border: `1px solid ${t.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ width: 36, height: 36, borderRadius: 12, background: t.accentLight, border: `1px solid ${t.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <img src="/logo_1.png" alt="Aranova Logo" style={{ height: 20, width: "auto", objectFit: "contain", filter: dark ? "brightness(0) invert(1)" : "none" }} />
               </div>
               <span style={{ fontWeight: 900, fontSize: 18, letterSpacing: -0.5, color: t.textPrim }}>ARANOVA</span>
             </a>
+            {/* Role badge next to logo */}
+            {!isMobile && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, background: t.accentLight, border: `1px solid ${t.border}`, borderRadius: 20, padding: "4px 12px", fontSize: 10, fontWeight: 800, color: t.accentText, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                {role === "driver" ? "🛺" : role === "cooperative" ? "🏢" : "💳"}{" "}
+                {role === "driver" ? "Driver" : role === "cooperative" ? "Cooperative" : "Commuter"}
+              </div>
+            )}
           </div>
 
           {/* Right: offline pill + dark mode + profile */}
@@ -189,14 +239,17 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
               {!isMobile && "Offline Ready"}
             </div>
 
-            <button onClick={() => setDark((d) => !d)} style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 8, width: 36, height: 36, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: t.textMuted }}>
+            <button onClick={toggleDark} style={{ background: "none", border: `1px solid ${t.border}`, borderRadius: 12, width: 36, height: 36, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: t.textMuted, transition: "all 0.2s" }}>
               {dark ? <IconSun /> : <IconMoon />}
             </button>
 
+            {/* Announcement Bell */}
+            {userData && <AnnouncementBell userData={userData} />}
+
             {/* Profile dropdown */}
             <div ref={dropdownRef} style={{ position: "relative" }}>
-              <button onClick={() => setDropdownOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: `1px solid ${t.border}`, borderRadius: 24, padding: "4px 10px 4px 4px", cursor: "pointer", color: t.textPrim }}>
-                <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#4F8EF7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: "#fff", flexShrink: 0 }}>
+              <button onClick={() => setDropdownOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: `1px solid ${t.border}`, borderRadius: 24, padding: "4px 10px 4px 4px", cursor: "pointer", color: t.textPrim, transition: "all 0.2s" }}>
+                <div style={{ width: 28, height: 28, borderRadius: "50%", background: `linear-gradient(135deg, ${role === "commuter" ? "#FFE600" : t.accent}, ${t.accentText})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: role === "commuter" && !dark ? "#000" : "#fff", flexShrink: 0 }}>
                   {initials}
                 </div>
                 {!isMobile && <span style={{ fontWeight: 600, fontSize: 13, color: t.textPrim }}>{displayName.split(' ')[0]}</span>}
@@ -204,18 +257,18 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
               </button>
 
               {dropdownOpen && (
-                <div style={{ position: "absolute", top: "calc(100% + 10px)", right: 0, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 16, minWidth: 200, boxShadow: dark ? "0 10px 40px rgba(0,0,0,0.5)" : "0 10px 40px rgba(0,0,0,0.08)", zIndex: 200, overflow: "hidden" }}>
+                <div style={{ position: "absolute", top: "calc(100% + 10px)", right: 0, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 20, minWidth: 220, boxShadow: dark ? "0 10px 40px rgba(0,0,0,0.5)" : "0 10px 40px rgba(0,0,0,0.06)", zIndex: 200, overflow: "hidden", padding: 6 }}>
                   <div style={{ padding: "16px", borderBottom: `1px solid ${t.border}` }}>
                     <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>{email}</div>
+                    <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4, wordBreak: "break-all" }}>{email}</div>
                   </div>
-                  <div style={{ padding: 8 }}>
-                    <a href="/user/settings" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", color: t.textPrim, textDecoration: "none", fontSize: 13, fontWeight: 600, borderRadius: 8 }}>
+                  <div style={{ padding: 4 }}>
+                    <a href="/user/settings" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", color: t.textPrim, textDecoration: "none", fontSize: 13, fontWeight: 600, borderRadius: 12, transition: "all 0.2s" }} className="hover:bg-black/5 dark:hover:bg-white/5">
                       <span style={{ color: t.textMuted }}><IconSettings /></span> Profile & Settings
                     </a>
                   </div>
-                  <div style={{ borderTop: `1px solid ${t.border}`, padding: 8 }}>
-                    <a href="/" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", color: "#E24B4A", textDecoration: "none", fontSize: 13, fontWeight: 700, borderRadius: 8 }}>
+                  <div style={{ borderTop: `1px solid ${t.border}`, padding: 4 }}>
+                    <a href="/" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", color: "#E24B4A", textDecoration: "none", fontSize: 13, fontWeight: 700, borderRadius: 12, transition: "all 0.2s" }} className="hover:bg-red-500/10">
                       <IconLogout /> Sign out
                     </a>
                   </div>
@@ -230,23 +283,25 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
 
           {/* ── DESKTOP SIDEBAR ────────────────────────────────────────────── */}
           {!isMobile && (
-            <aside style={{ width: sidebarW, background: t.bgSidebar, borderRight: `1px solid ${t.border}`, display: "flex", flexDirection: "column", flexShrink: 0, transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1)", transform: sidebarOpen ? "translateX(0)" : `translateX(-${sidebarW}px)`, marginLeft: sidebarOpen ? 0 : -sidebarW, position: "sticky", top: 64, height: "calc(100vh - 64px)" }}>
-              <div style={{ padding: "24px 16px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "1px", color: t.textFaint, textTransform: "uppercase", padding: "0 12px", marginBottom: 8 }}>Main Menu</div>
+            <aside style={{ width: sidebarW, background: t.bgSidebar, borderRight: `1px solid ${t.border}`, display: "flex", flexDirection: "column", flexShrink: 0, transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1)", transform: sidebarOpen ? "translateX(0)" : `translateX(-${sidebarW}px)`, marginLeft: sidebarOpen ? 0 : -sidebarW, position: "sticky", top: 64, height: "calc(100vh - 64px)", padding: 10 }}>
+              <div style={{ padding: "14px 12px 6px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Main Menu</div>
                 {dynamicMainNav.map((item) => <NavLink key={item.key} item={item} />)}
               </div>
-              <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "1px", color: t.textFaint, textTransform: "uppercase", padding: "0 12px", marginBottom: 8 }}>Account</div>
+              <div style={{ padding: "12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Account</div>
                 {ACCOUNT_NAV.map((item) => <NavLink key={item.key} item={item} />)}
               </div>
-              <div style={{ marginTop: "auto", padding: 16, borderTop: `1px solid ${t.border}` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 4px" }}>
-                  <div style={{ width: 38, height: 38, borderRadius: "50%", background: "linear-gradient(135deg, #1652C9, #4F8EF7)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: "#fff", flexShrink: 0 }}>
+              <div style={{ marginTop: "auto", padding: 12, borderTop: `1px solid ${t.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px", borderRadius: 16, background: t.accentLight, border: `1px solid ${t.border}` }}>
+                  <div style={{ width: 38, height: 38, borderRadius: "50%", background: `linear-gradient(135deg, ${role === "commuter" ? "#FFE600" : t.accent}, ${t.accentText})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 800, color: role === "commuter" && !dark ? "#000" : "#fff", flexShrink: 0 }}>
                     {initials}
                   </div>
-                  <div style={{ overflow: "hidden" }}>
+                  <div style={{ overflow: "hidden", flex: 1 }}>
                     <div style={{ fontWeight: 800, fontSize: 14, color: t.textPrim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: t.textMuted, fontWeight: 500 }}>{roleDisplay}</div>
+                    <div style={{ fontSize: 10, color: t.accentText, fontWeight: 800, marginTop: 2 }}>
+                      {role === "driver" ? "🛺 Driver" : role === "cooperative" ? "🏢 Cooperative" : "💳 Commuter"}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -254,20 +309,24 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
           )}
 
           {/* ── MAIN CONTENT ─────────────────────────────────────────────── */}
-          <main style={{ flex: 1, padding: isMobile ? "20px 16px" : "32px", maxWidth: "100%", overflowX: "hidden" }}>
+          <main style={{ flex: 1, padding: isMobile ? "20px 16px 88px" : "32px", maxWidth: "100%", overflowX: "hidden" }}>
             {children}
           </main>
         </div>
 
         {/* ── MOBILE BOTTOM NAVIGATION (FIXED TO BOTTOM OF SCREEN) ────────── */}
         {isMobile && (
-          <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 68, background: t.bgHeader, borderTop: `1px solid ${t.border}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 68, background: t.bgHeader, borderTop: `1px solid ${t.border}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+            {/* Role accent stripe top of mobile nav */}
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: role === "driver" ? "linear-gradient(90deg, #FF6B00, #FF8833)" : role === "cooperative" ? "linear-gradient(90deg, #10B981, #34D399)" : "linear-gradient(90deg, #FFE600, #FFEE55)" }} />
             {dynamicMobileNav.map((item) => {
               const isActive = activeTab === item.key;
               return (
-                <a key={item.key} href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, color: isActive ? t.blueText : t.textMuted, textDecoration: "none", fontSize: 11, fontWeight: isActive ? 800 : 600, flex: 1, height: "100%" }}>
-                  {item.icon}
-                  <span>{item.label}</span>
+                <a key={item.key} href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, color: isActive ? t.accentText : t.textMuted, textDecoration: "none", fontSize: 10, fontWeight: isActive ? 800 : 600, flex: 1, height: "100%", transition: "all 0.2s", position: "relative" }}>
+                  {/* Active indicator dot */}
+                  {isActive && <div style={{ position: "absolute", top: 4, width: 4, height: 4, borderRadius: "50%", background: t.accent }} />}
+                  <span style={{ transform: isActive ? "scale(1.15)" : "scale(1)", transition: "transform 0.25s cubic-bezier(0.16,1,0.3,1)", marginTop: 8 }}>{item.icon}</span>
+                  <span style={{ letterSpacing: "0.03em" }}>{item.label}</span>
                 </a>
               );
             })}
@@ -276,7 +335,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
 
         <style>{`@keyframes aranovapulse{0%,100%{opacity:1}50%{opacity:.4}}`}</style>
       </div>
-    </ThemeContext.Provider>
+    </>
   );
 };
 

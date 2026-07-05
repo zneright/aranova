@@ -13,6 +13,11 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Helper to get user role
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
     // 1. Users Collection
     match /users/{userId} {
       // Authenticated users can query profiles (e.g. commuters paying drivers, coops loading drivers)
@@ -69,13 +74,34 @@ service cloud.firestore {
     match /app_config/{configId} {
       // All authenticated users read policies
       allow read: if isAuthenticated();
-      // Cooperatives can write policy parameters
+      // Cooperatives or admin can write policy parameters
       allow write: if isAuthenticated();
     }
 
     // 7. Offline Payments Collection (Bluetooth Queue tracking logs)
     match /offline_payments/{paymentId} {
       allow read, write: if isAuthenticated();
+    }
+
+    // 8. Announcements Collection
+    match /announcements/{announcementId} {
+      // All authenticated users can read announcements
+      allow read: if isAuthenticated();
+      // Only admins and cooperatives can create announcements
+      allow create: if isAuthenticated() && (
+        getUserRole() == "admin" || 
+        getUserRole() == "cooperative"
+      );
+      // Only admins can update or delete announcements
+      allow update, delete: if isAuthenticated() && getUserRole() == "admin";
+    }
+
+    // 9. Announcement Reads Collection (tracking who read what)
+    match /announcement_reads/{readId} {
+      // Users can read/write their own read status documents
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create, update: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
   }
 }

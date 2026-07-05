@@ -1,15 +1,104 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --role-accent: #FFE600;
+}
+
 body {
   margin: 0;
-  background-color: #FAF8F5; 
+  background-color: #FAF8F5;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
 #root {
   width: 100%;
   min-height: 100vh;
+}
+
+/* Premium Animations & Effects */
+@keyframes pulseGlow {
+  0% { transform: scale(1) translate(0px, 0px); opacity: 0.06; }
+  50% { transform: scale(1.15) translate(-15px, 15px); opacity: 0.12; }
+  100% { transform: scale(0.9) translate(10px, -10px); opacity: 0.05; }
+}
+
+@keyframes float {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes floatDelayed {
+  0% { transform: translateY(0px); }
+  50% { transform: translateY(-5px); }
+  100% { transform: translateY(0px); }
+}
+
+@keyframes pulseBorder {
+  0% { border-color: rgba(var(--role-accent-rgb), 0.2); box-shadow: 0 0 0px transparent; }
+  50% { border-color: rgba(var(--role-accent-rgb), 0.6); box-shadow: 0 0 15px rgba(var(--role-accent-rgb), 0.3); }
+  100% { border-color: rgba(var(--role-accent-rgb), 0.2); box-shadow: 0 0 0px transparent; }
+}
+
+@keyframes slideUpFade {
+  0% { opacity: 0; transform: translateY(20px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-glow {
+  animation: pulseGlow 9s infinite alternate ease-in-out;
+}
+
+.animate-float {
+  animation: float 4s infinite ease-in-out;
+}
+
+.animate-float-delayed {
+  animation: floatDelayed 4.5s infinite ease-in-out 1s;
+}
+
+.animate-slide-up {
+  animation: slideUpFade 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.premium-card {
+  transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.premium-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.06);
+}
+
+.dark .premium-card:hover {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+.premium-interactive {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.premium-interactive:active {
+  transform: scale(0.96);
+}
+
+/* Custom Webkit scrollbar for clean telemetry logs console */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
 }

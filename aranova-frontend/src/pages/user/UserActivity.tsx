@@ -2,7 +2,8 @@ import { useState, useEffect } from "react";
 import { collection, getDocs } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useAuth } from "../../contexts/AuthContext";
-import UserLayout, { useTheme } from "../../components/layout/UserLayout";
+import UserLayout from "../../components/layout/UserLayout";
+import { useTheme } from "../../contexts/ThemeContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 
 const UserActivity = () => {
@@ -18,15 +19,18 @@ const UserActivity = () => {
     }
     setLoading(true);
     try {
-      // Fetch user profiles to map Public Keys to Real Names
-      const usersSnap = await getDocs(collection(db, "users"));
       const nameMap: Record<string, string> = {};
-      usersSnap.forEach(d => {
-        const u = d.data();
-        if (u.publicKey) {
-          nameMap[u.publicKey] = u.displayName || u.coopName || "Unknown User";
-        }
-      });
+      try {
+        const usersSnap = await getDocs(collection(db, "users"));
+        usersSnap.forEach(d => {
+          const u = d.data();
+          if (u.publicKey) {
+            nameMap[u.publicKey] = u.displayName || u.coopName || "Unknown User";
+          }
+        });
+      } catch (err) {
+        console.warn("Could not retrieve user directory for name mapping (permission restricted):", err);
+      }
 
       const networkUrl = userData.network === "PUBLIC"
         ? "https://horizon.stellar.org"
@@ -80,8 +84,6 @@ const UserActivity = () => {
     window.location.href = routes[key] || "/user";
   };
 
-  const cardBg = dark ? "bg-[#1A1D27] border-[#2A2D3A]" : "bg-white border-gray-100";
-  const textMain = dark ? "text-[#F1F5F9]" : "text-gray-900";
   const textMuted = dark ? "text-[#94A3B8]" : "text-gray-500";
   const itemHover = dark ? "hover:bg-white/5" : "hover:bg-gray-50";
 
@@ -89,44 +91,175 @@ const UserActivity = () => {
     return <LoadingWorkspace message="Loading account transactional history..." dark={dark} />;
   }
 
-  return (
-    <UserLayout activeTab="activity" onTabChange={handleNav} userData={userData}>
-      <div className="max-w-3xl mx-auto space-y-6">
+  const role = userData?.role || "commuter";
 
-        <div className="flex justify-between items-center mb-4">
-          <h1 className={`text-2xl font-black ${textMain}`}>Activity Logs</h1>
-          <button
-            onClick={fetchHistory}
-            className={`p-2 px-4 border rounded-lg text-xs font-bold transition-colors shadow-sm hover:shadow active:scale-95 uppercase tracking-wider ${dark ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-          >
-            Refresh Ledger
-          </button>
+  const getRoleColors = () => {
+    switch (role) {
+      case "driver":
+        return {
+          accent: "#FF6B00",
+          accentText: dark ? "text-[#FF8833]" : "text-[#D45600]",
+          accentBg: "bg-[#FF6B00] text-white hover:bg-[#E05E00]",
+          badgeBg: "bg-[#FF6B00]/10 text-[#FF8833]",
+          border: dark ? "border-white/5" : "border-[#EAE6DF]",
+          card: dark ? "bg-[#141620]" : "bg-white",
+        };
+      case "cooperative":
+        return {
+          accent: "#10B981",
+          accentText: dark ? "text-[#34D399]" : "text-[#059669]",
+          accentBg: "bg-[#10B981] text-white hover:bg-[#0E9F6E]",
+          badgeBg: "bg-[#10B981]/10 text-[#34D399]",
+          border: dark ? "border-white/5" : "border-[#D5E2EC]",
+          card: dark ? "bg-[#0A1128]" : "bg-white",
+        };
+      case "commuter":
+      default:
+        return {
+          accent: "#FFE600",
+          accentText: dark ? "text-[#FFE600]" : "text-[#8A7D00]",
+          accentBg: "bg-[#FFE600] text-black hover:bg-[#E6CE00]",
+          badgeBg: "bg-[#FFE600]/10 text-black dark:text-[#FFE600] dark:bg-[#FFE600]/10",
+          border: dark ? "border-white/5" : "border-[#E2E2DF]",
+          card: dark ? "bg-[#0E0F14]" : "bg-white",
+        };
+    }
+  };
+
+  const theme = getRoleColors();
+
+  if (authLoading) {
+    return <LoadingWorkspace message="Loading account transactional history..." dark={dark} />;
+  }
+
+  // Commuter Layout - Sleek, centered minimalist bento
+  const renderCommuterLayout = () => (
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h1 className={`text-2xl font-black ${dark ? 'text-white' : 'text-gray-900'}`}>Activity Logs</h1>
+          <p className={`text-xs mt-1 ${textMuted}`}>Your P2P transactions and transit history</p>
+        </div>
+        <button
+          onClick={fetchHistory}
+          className={`p-3 px-5 rounded-xl text-xs font-black transition-all active:scale-95 uppercase tracking-wider ${theme.accentBg}`}
+        >
+          Refresh Ledger
+        </button>
+      </div>
+
+      <div className={`border rounded-[28px] shadow-sm overflow-hidden ${theme.card} ${theme.border}`}>
+        <div className={`divide-y ${dark ? 'divide-white/5' : 'divide-gray-200'}`}>
+          {loading ? (
+            <div className={`p-12 text-center text-sm font-bold ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Syncing with Horizon API...</div>
+          ) : activities.length === 0 ? (
+            <div className="p-12 text-center flex flex-col items-center justify-center">
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl mb-4 ${dark ? 'bg-white/5' : 'bg-gray-100'}`}>📜</div>
+              <p className={`font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>No transactions found</p>
+              <p className={`text-xs mt-1 ${textMuted}`}>P2P and transit ledger is currently empty.</p>
+            </div>
+          ) : (
+            activities.map((item) => (
+              <div key={item.id} className={`flex items-center justify-between p-5 cursor-pointer transition-colors ${itemHover}`}>
+                <div className="flex items-center gap-4">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-black shrink-0 ${
+                    item.title.includes("Received") 
+                      ? 'bg-emerald-500/10 text-emerald-500' 
+                      : (dark ? 'bg-white/5 text-gray-400' : 'bg-gray-100 text-gray-500')
+                  }`}>
+                    {item.icon}
+                  </div>
+                  <div className="overflow-hidden">
+                    <p className={`font-black text-sm sm:text-base truncate ${dark ? 'text-white' : 'text-gray-900'}`}>{item.title}</p>
+                    <p className={`text-[10px] font-black tracking-wider uppercase mt-1 ${textMuted}`}>{item.sub}</p>
+                  </div>
+                </div>
+                <div className="text-right shrink-0 ml-4">
+                  <p className={`font-black text-base sm:text-lg ${
+                    item.title.includes("Received") 
+                      ? 'text-emerald-500' 
+                      : (dark ? 'text-white' : 'text-gray-900')
+                  }`}>{item.amt}</p>
+                  <p className={`text-[10px] font-bold tracking-wider ${textMuted}`}>XLM</p>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // Driver Layout - Sturdy bento grid optimized for mobile touch
+  const renderDriverLayout = () => (
+    <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className={`text-2xl font-black ${dark ? 'text-white' : 'text-gray-900'}`}>Transit Activity Logs</h1>
+          <p className={`text-xs mt-1 ${textMuted}`}>Review fare collections and fuel payments</p>
+        </div>
+        <button
+          onClick={fetchHistory}
+          className={`p-3 px-5 rounded-xl text-xs font-black transition-all active:scale-95 uppercase tracking-wider ${theme.accentBg}`}
+        >
+          Refresh Ledger
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Left Column: Driver Metrics Summary Bento */}
+        <div className={`rounded-[28px] p-6 border shadow-sm flex flex-col justify-between ${theme.card} ${theme.border}`}>
+          <div>
+            <h3 className={`text-sm font-black uppercase mb-2 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>Operation Summary</h3>
+            <p className={`text-xs leading-relaxed ${textMuted}`}>
+              Every transit payment processed offline is securely logged on-chain. Syncing with Horizon ledger ensures accurate balance settlements.
+            </p>
+          </div>
+          <div className={`mt-6 pt-6 border-t space-y-3 ${dark ? 'border-white/5' : 'border-gray-200'}`}>
+            <div className="flex justify-between text-xs font-semibold">
+              <span className={textMuted}>Role Status:</span>
+              <span className={`font-black uppercase tracking-wider ${theme.accentText}`}>Active Operator</span>
+            </div>
+            <div className="flex justify-between text-xs font-semibold">
+              <span className={textMuted}>Total Logged:</span>
+              <span className={`font-bold ${dark ? 'text-gray-500' : 'text-gray-400'}`}>{activities.length} entries</span>
+            </div>
+          </div>
         </div>
 
-        <div className={`border rounded-[24px] shadow-sm overflow-hidden ${cardBg}`}>
-          <div className="divide-y divide-gray-200 dark:divide-gray-800">
+        {/* Right Column: Transactions Feed */}
+        <div className={`md:col-span-2 border rounded-[28px] shadow-sm overflow-hidden ${theme.card} ${theme.border}`}>
+          <div className={`divide-y ${dark ? 'divide-white/5' : 'divide-gray-200'}`}>
             {loading ? (
-              <div className="p-8 text-center text-sm font-bold text-gray-400">Syncing with Horizon API...</div>
+              <div className={`p-12 text-center text-sm font-bold ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Syncing with Horizon API...</div>
             ) : activities.length === 0 ? (
-              <div className="p-10 text-center flex flex-col items-center justify-center">
-                <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center text-2xl mb-3">📜</div>
-                <p className={`font-bold ${textMain}`}>No history found</p>
-                <p className={`text-xs mt-1 ${textMuted}`}>Try switching networks in Settings if you expect to see data.</p>
+              <div className="p-12 text-center flex flex-col items-center justify-center">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl mb-4 ${dark ? 'bg-white/5' : 'bg-gray-100'}`}>📜</div>
+                <p className={`font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>No history found</p>
+                <p className={`text-xs mt-1 ${textMuted}`}>No transactions loaded yet.</p>
               </div>
             ) : (
               activities.map((item) => (
-                <div key={item.id} className={`flex items-center justify-between p-5 cursor-pointer transition-colors ${itemHover}`}>
+                <div key={item.id} className={`flex items-center justify-between p-5 cursor-pointer transition-all ${itemHover}`}>
                   <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-xl font-black shrink-0 ${item.bg}`}>
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-lg font-black shrink-0 ${
+                      item.title.includes("Received") 
+                        ? 'bg-emerald-500/10 text-emerald-500' 
+                        : 'bg-[#FF6B00]/10 text-[#FF6B00]'
+                    }`}>
                       {item.icon}
                     </div>
                     <div className="overflow-hidden">
-                      <p className={`font-bold text-sm sm:text-base truncate ${textMain}`}>{item.title}</p>
-                      <p className={`text-[10px] font-bold tracking-wider uppercase mt-1 ${textMuted}`}>{item.sub}</p>
+                      <p className={`font-black text-sm truncate ${dark ? 'text-white' : 'text-gray-900'}`}>{item.title}</p>
+                      <p className={`text-[10px] font-black tracking-wider uppercase mt-1 ${textMuted}`}>{item.sub}</p>
                     </div>
                   </div>
                   <div className="text-right shrink-0 ml-4">
-                    <p className={`font-black text-base sm:text-lg ${item.color}`}>{item.amt}</p>
+                    <p className={`font-black text-base ${
+                      item.title.includes("Received") 
+                        ? 'text-emerald-500' 
+                        : 'text-amber-500'
+                    }`}>{item.amt}</p>
                     <p className={`text-[10px] font-bold tracking-wider ${textMuted}`}>XLM</p>
                   </div>
                 </div>
@@ -135,6 +268,74 @@ const UserActivity = () => {
           </div>
         </div>
       </div>
+    </div>
+  );
+
+  // Cooperative Layout - Institutional Audit Ledger
+  const renderCooperativeLayout = () => (
+    <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex justify-between items-center mb-2">
+        <div>
+          <h1 className={`text-2xl font-black ${dark ? 'text-white' : 'text-gray-900'}`}>Treasury Ledger</h1>
+          <p className={`text-xs mt-1 ${textMuted}`}>Real-time audit log of cooperative pool payments</p>
+        </div>
+        <button
+          onClick={fetchHistory}
+          className={`p-3 px-5 rounded-xl text-xs font-black transition-all active:scale-95 uppercase tracking-wider ${theme.accentBg}`}
+        >
+          Refresh Ledger
+        </button>
+      </div>
+
+      <div className={`border rounded-[28px] shadow-sm overflow-hidden ${theme.card} ${theme.border}`}>
+        <div className={`p-6 border-b flex items-center justify-between text-xs font-black uppercase tracking-wider ${dark ? 'border-white/5 bg-black/10 text-gray-500' : 'border-gray-200 bg-gray-50/50 text-gray-400'}`}>
+          <span>Transaction Details</span>
+          <span>Settlement</span>
+        </div>
+        <div className={`divide-y ${dark ? 'divide-white/5' : 'divide-gray-200'}`}>
+          {loading ? (
+            <div className={`p-12 text-center text-sm font-bold ${dark ? 'text-gray-500' : 'text-gray-400'}`}>Syncing with Horizon API...</div>
+          ) : activities.length === 0 ? (
+            <div className="p-12 text-center flex flex-col items-center justify-center">
+              <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl mb-4 ${dark ? 'bg-white/5' : 'bg-gray-100'}`}>🏛️</div>
+              <p className={`font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>No audit entries</p>
+              <p className={`text-xs mt-1 ${textMuted}`}>No transactions synced under this account.</p>
+            </div>
+          ) : (
+            activities.map((item) => (
+              <div key={item.id} className={`flex items-center justify-between p-5 transition-all ${itemHover}`}>
+                <div className="flex items-center gap-4">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-base font-black shrink-0 ${
+                    item.title.includes("Received") 
+                      ? 'bg-emerald-500/10 text-emerald-500' 
+                      : 'bg-indigo-500/10 text-indigo-400'
+                  }`}>
+                    {item.icon}
+                  </div>
+                  <div>
+                    <p className={`font-black text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>{item.title}</p>
+                    <p className={`text-[10px] font-semibold mt-1 uppercase tracking-wide ${dark ? 'text-gray-500' : 'text-gray-400'}`}>{item.sub}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className={`font-black text-base ${
+                    item.title.includes("Received") 
+                      ? 'text-emerald-500' 
+                      : 'text-indigo-400'
+                  }`}>{item.amt}</p>
+                  <span className="text-[10px] font-black tracking-widest text-gray-500 uppercase">XLM</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <UserLayout activeTab="activity" onTabChange={handleNav} userData={userData}>
+      {role === "driver" ? renderDriverLayout() : role === "cooperative" ? renderCooperativeLayout() : renderCommuterLayout()}
     </UserLayout>
   );
 };

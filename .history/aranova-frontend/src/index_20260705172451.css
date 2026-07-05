@@ -1,0 +1,105 @@
+/* index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Global Base - Atome Inspired */
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+    /* Default (Fallback) Colors */
+    --bg-base: #FAF8F5;
+    /* Soft off-white */
+    --surface-card: #FFFFFF;
+    --text-primary: #1A1A1A;
+    --text-secondary: #71717A;
+    --border-light: #E4E4E7;
+
+    /* Shared Premium Atome Shadow */
+    --shadow-bento: 0 4px 24px rgba(0, 0, 0, 0.04);
+    --radius-bento: 1.5rem;
+    /* Large rounded cards */
+  }
+
+  /* --- ROLE: COMMUTER --- */
+  /* Vibe: Fast, clean, vibrant, neon-yellow/green accents (Atome classic) */
+  .theme-commuter {
+    --bg-base: #F7F9F8;
+    --accent-primary: #E1FF00;
+    /* Atome Neon */
+    --accent-hover: #D4F000;
+    --accent-text: #121212;
+    --surface-card: #FFFFFF;
+    --bento-border: transparent;
+  }
+
+  /* --- ROLE: DRIVER --- */
+  /* Vibe: High contrast, outdoor readability, dark-mode leaning bento boxes */
+  .theme-driver {
+    --bg-base: #121212;
+    --surface-card: #1E1E1E;
+    --text-primary: #FFFFFF;
+    --text-secondary: #A1A1AA;
+    --accent-primary: #FF5A5F;
+    /* High visibility red/coral */
+    --accent-hover: #E0484D;
+    --accent-text: #FFFFFF;
+    --bento-border: #27272A;
+  }
+
+  /* --- ROLE: COOPERATIVE --- */
+  /* Vibe: Enterprise-lite, trust, financial stability, blue/indigo hues */
+  .theme-coop {
+    --bg-base: #F4F6F8;
+    --surface-card: #FFFFFF;
+    --accent-primary: #4F46E5;
+    /* Premium Indigo */
+    --accent-hover: #4338CA;
+    --accent-text: #FFFFFF;
+    --bento-border: #E5E7EB;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.4s ease, color 0.4s ease;
+  }
+
+  #root {
+    width: 100%;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+}
+
+@layer components {
+
+  /* Universal Bento Card Component */
+  .bento-card {
+    @apply bg-[var(--surface-card)] rounded-[var(--radius-bento)] p-6 transition-all duration-300;
+    box-shadow: var(--shadow-bento);
+    border: 1px solid var(--bento-border);
+  }
+
+  .bento-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+  }
+
+  /* Universal Premium Button */
+  .btn-premium {
+    @apply font-semibold rounded-full px-6 py-3 transition-all duration-300 flex items-center justify-center;
+    background-color: var(--accent-primary);
+    color: var(--accent-text);
+  }
+
+  .btn-premium:hover {
+    background-color: var(--accent-hover);
+    transform: scale(1.02);
+  }
+}

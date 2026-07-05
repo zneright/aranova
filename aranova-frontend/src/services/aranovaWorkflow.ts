@@ -57,7 +57,14 @@ export const getDocsSafe = async (q: any): Promise<any[]> => {
 
 export const ensureUserProfile = async (user: any) => {
     const ref = doc(db, "users", user.uid);
-    const snap = await getDoc(ref);
+    let snap;
+    try {
+        snap = await getDoc(ref);
+    } catch (err) {
+        console.warn("User profile fetch failed, retrying after 600ms auth synchronization...", err);
+        await new Promise((res) => setTimeout(res, 600));
+        snap = await getDoc(ref);
+    }
 
     if (!snap.exists()) {
         const profile = {

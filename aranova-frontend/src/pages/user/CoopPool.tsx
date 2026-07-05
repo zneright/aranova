@@ -1,315 +1,139 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../../contexts/AuthContext";
-import UserLayout, { useTheme } from "../../components/layout/UserLayout";
+import UserLayout from "../../components/layout/UserLayout";
+import { useTheme } from "../../contexts/ThemeContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import {
-  collection,
-  doc,
-  addDoc,
-  setDoc,
-  updateDoc,
-  increment,
-  serverTimestamp,
-  query,
-  where,
-  onSnapshot,
+  collection, doc, addDoc, setDoc, updateDoc,
+  increment, serverTimestamp, query, where, onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import {
-  formatXlm,
-  defaultPolicy,
-  type Policy,
-  parseTimestamp,
-  dayMs,
+  formatXlm, defaultPolicy, type Policy,
+  parseTimestamp, dayMs,
 } from "../../services/aranovaWorkflow";
 import {
-  depositPool,
-  releaseCredit,
-  getPoolBalance,
-  NETWORK_PASSPHRASE,
-  getLiveStellarBalance,
+  depositPool, releaseCredit, getPoolBalance,
+  NETWORK_PASSPHRASE, getLiveStellarBalance,
 } from "../../services/sorobanService";
 import CryptoJS from "crypto-js";
 import { FreighterModule } from "@creit.tech/stellar-wallets-kit/modules/freighter";
 import { xBullModule } from "@creit.tech/stellar-wallets-kit/modules/xbull";
 import { LobstrModule } from "@creit.tech/stellar-wallets-kit/modules/lobstr";
 
-// Helper: resolve active signer credentials based on user profile type (native soft key vs freighter extension)
 const getSigningHandler = async (userData: any, networkPassphrase: string) => {
   if (userData.encryptedSecretKey) {
-    const pin = prompt("Enter your 4-digit PIN to authorize this contract transaction:");
-    if (!pin) throw new Error("Transaction signature cancelled.");
-
-    try {
-      const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, pin);
-      const secret = bytes.toString(CryptoJS.enc.Utf8);
-      if (!secret || !secret.startsWith("S")) {
-        throw new Error("Invalid PIN or corrupted key.");
-      }
-      return { signWithSecret: secret };
-    } catch (err) {
-      alert("Failed to decrypt key. Please check your PIN.");
-      throw err;
-    }
-  } else {
-    const walletId = userData.network?.toLowerCase() || "freighter";
-    let module: any;
-    if (walletId.includes("xbull")) {
-      module = new xBullModule();
-    } else if (walletId.includes("lobstr")) {
-      module = new LobstrModule();
-    } else {
-      module = new FreighterModule();
-    }
-
-    const isAvailable = await module.isAvailable();
-    if (!isAvailable) {
-      throw new Error(`${walletId.toUpperCase()} wallet is not available/detected.`);
-    }
-
-    return {
-      signWithWallet: async (xdr: string) => {
-        return await module.signTransaction(xdr, {
-          networkPassphrase,
-          publicKey: userData.publicKey,
-        });
-      },
-    };
+    const pin = prompt("Enter your 4-digit PIN to authorize:");
+    if (!pin) throw new Error("Cancelled.");
+    const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, pin);
+    const secret = bytes.toString(CryptoJS.enc.Utf8);
+    if (!secret || !secret.startsWith("S")) throw new Error("Invalid PIN.");
+    return { signWithSecret: secret };
   }
+  const walletId = userData.network?.toLowerCase() || "freighter";
+  let module: any;
+  if (walletId.includes("xbull")) module = new xBullModule();
+  else if (walletId.includes("lobstr")) module = new LobstrModule();
+  else module = new FreighterModule();
+  if (!(await module.isAvailable())) throw new Error("Wallet not available.");
+  return {
+    signWithWallet: async (xdr: string) =>
+      await module.signTransaction(xdr, { networkPassphrase, publicKey: userData.publicKey }),
+  };
 };
 
-const StatCard: React.FC<{ title: string; value: string; note?: string; dark: boolean }> = ({
-  title,
-  value,
-  note,
-  dark,
-}) => (
-  <div
-    style={{
-      background: dark ? "#08111f" : "#ffffff",
-      border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-      borderRadius: 18,
-      padding: 16,
-    }}
-  >
-    <div style={{ fontSize: 12, color: dark ? "#94a3b8" : "#64748b", marginBottom: 8 }}>{title}</div>
-    <div style={{ fontSize: 20, fontWeight: 800 }}>{value}</div>
-    {note && <div style={{ marginTop: 6, fontSize: 12, color: dark ? "#64748b" : "#94a3b8" }}>{note}</div>}
-  </div>
-);
+// ── Trust Score Bar ──────────────────────────────────────────────────────────
+const TrustBar = ({ score }: { score: number }) => {
+  const color = score >= 80 ? "#10B981" : score <= 30 ? "#EF4444" : "#F59E0B";
+  return (
+    <div className="h-1 w-full rounded-full bg-white/5 overflow-hidden mt-2">
+      <div style={{ width: `${Math.min(100, score)}%`, background: color, height: "100%", borderRadius: 99, transition: "width 0.7s cubic-bezier(0.16,1,0.3,1)" }} />
+    </div>
+  );
+};
 
-const PrimaryButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { dark: boolean; ghost?: boolean }> = ({
-  dark,
-  ghost,
-  style,
-  ...props
-}) => (
+// ── Tab Button ───────────────────────────────────────────────────────────────
+const Tab = ({ label, active, onClick, badge, dark }: { label: string; active: boolean; onClick: () => void; badge?: number; dark: boolean }) => (
   <button
-    {...props}
-    style={{
-      border: "none",
-      borderRadius: 999,
-      padding: "12px 16px",
-      fontWeight: 800,
-      cursor: props.disabled ? "not-allowed" : "pointer",
-      background: ghost ? (dark ? "#1f2937" : "#e2e8f0") : (dark ? "#10b981" : "#0f766e"),
-      color: ghost ? (dark ? "#f8fafc" : "#111827") : "#ffffff",
-      ...style,
-    }}
-  />
+    onClick={onClick}
+    className={`relative px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all ${
+      active
+        ? "bg-[#10B981] text-white shadow-sm"
+        : dark ? "text-gray-500 hover:text-gray-300 hover:bg-white/5" : "text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+    }`}
+  >
+    {label}
+    {badge !== undefined && badge > 0 && (
+      <span className={`ml-1.5 px-1.5 py-0.5 rounded-full text-[9px] font-black ${active ? "bg-white/20 text-white" : "bg-amber-500/20 text-amber-400"}`}>
+        {badge}
+      </span>
+    )}
+  </button>
 );
 
-const inputStyle = (dark: boolean) => ({
-  width: "100%",
-  border: `1px solid ${dark ? "#334155" : "#cbd5e1"}`,
-  borderRadius: 14,
-  padding: "12px 14px",
-  fontSize: 14,
-  background: dark ? "#0f172a" : "#fff",
-  color: dark ? "#f8fafc" : "#0f172a",
-  outline: "none",
-  fontFamily: "inherit",
-});
-
+// ── Main ─────────────────────────────────────────────────────────────────────
 const CoopPool = () => {
   const { userData, loading: authLoading } = useAuth();
   const { dark } = useTheme();
 
-  const [depositAmount, setDepositAmount] = useState("");
+  const [activeTab, setActiveTab] = useState<"requests" | "drivers" | "policy">("requests");
+  const [depositAmount, setDepositAmount] = useState("0");
   const [requests, setRequests] = useState<any[]>([]);
   const [coopDrivers, setCoopDrivers] = useState<any[]>([]);
   const [policy, setPolicy] = useState<Policy>(defaultPolicy);
-  const [stats, setStats] = useState<any>({
-    poolBalance: 0,
-    totalDeposited: 0,
-    totalReleased: 0,
-    totalRepaid: 0,
-    outstanding: 0,
-    lockedVaultBalance: 0,
-  });
+  const [stats, setStats] = useState<any>({ poolBalance: 0, totalDeposited: 0, totalReleased: 0, totalRepaid: 0 });
   const [busy, setBusy] = useState(false);
   const [driverBalances, setDriverBalances] = useState<{ [uid: string]: string }>({});
 
-  // Sync driver balances dynamically
   useEffect(() => {
-    coopDrivers.forEach((driver) => {
-      if (driver.publicKey && driverBalances[driver.uid] === undefined) {
-        getLiveStellarBalance(driver.publicKey)
-          .then((bal) => {
-            setDriverBalances((prev) => ({ ...prev, [driver.uid]: bal }));
-          })
-          .catch(() => undefined);
+    coopDrivers.forEach((d) => {
+      if (d.publicKey && driverBalances[d.uid] === undefined) {
+        getLiveStellarBalance(d.publicKey).then((b) => setDriverBalances((p) => ({ ...p, [d.uid]: b }))).catch(() => undefined);
       }
     });
   }, [coopDrivers, driverBalances]);
 
-  // Sync DB records
   useEffect(() => {
     if (authLoading || !userData?.uid) return;
-
-    const statsUnsub = onSnapshot(
-      doc(db, "coop_stats", userData.uid),
-      (snap) => {
-        if (snap.exists()) setStats((previous: any) => ({ ...previous, ...(snap.data() as any) }));
-      },
-      (err) => console.warn("Cooperative stats snapshot error:", err)
-    );
-
+    const u1 = onSnapshot(doc(db, "coop_stats", userData.uid), (s) => { if (s.exists()) setStats((p: any) => ({ ...p, ...s.data() })); }, console.warn);
     if (userData?.publicKey) {
-      getPoolBalance(userData.publicKey)
-        .then((onChainBalance) => {
-          if (onChainBalance !== -1n) {
-            const displayBalance = Number(onChainBalance) / 10_000_000;
-            setStats((previous: any) => ({ ...previous, poolBalance: displayBalance }));
-          }
-        })
-        .catch((err) => {
-          console.warn("Failed to check on-chain pool balance:", err);
-        });
+      getPoolBalance(userData.publicKey).then((b) => { if (b !== -1n) setStats((p: any) => ({ ...p, poolBalance: Number(b) / 1e7 })); }).catch(console.warn);
     }
-
-    const requestsUnsub = onSnapshot(
-      query(collection(db, "fuel_requests"), where("coopId", "==", userData.uid)),
-      (snap) => {
-        setRequests(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
-      },
-      (err) => console.warn("Cooperative requests snapshot error:", err)
-    );
-
-    const policyUnsub = onSnapshot(
-      doc(db, "app_config", "policy"),
-      (snap) => {
-        if (snap.exists()) setPolicy({ ...defaultPolicy, ...(snap.data() as any) });
-      },
-      (err) => console.warn("Cooperative policy snapshot error:", err)
-    );
-
-    const driversUnsub = onSnapshot(
-      query(collection(db, "users"), where("role", "==", "driver"), where("cooperativeId", "==", userData.uid)),
-      (snap) => {
-        setCoopDrivers(snap.docs.map((item) => ({ id: item.id, ...item.data() })));
-      },
-      (err) => console.warn("Cooperative drivers snapshot error:", err)
-    );
-
-    return () => {
-      statsUnsub();
-      requestsUnsub();
-      policyUnsub();
-      driversUnsub();
-    };
+    const u2 = onSnapshot(query(collection(db, "fuel_requests"), where("coopId", "==", userData.uid)), (s) => setRequests(s.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
+    const u3 = onSnapshot(doc(db, "app_config", "policy"), (s) => { if (s.exists()) setPolicy({ ...defaultPolicy, ...s.data() as any }); }, console.warn);
+    const u4 = onSnapshot(query(collection(db, "users"), where("role", "==", "driver"), where("cooperativeId", "==", userData.uid)), (s) => setCoopDrivers(s.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
+    return () => { u1(); u2(); u3(); u4(); };
   }, [authLoading, userData?.uid, userData?.publicKey]);
 
-  if (authLoading || !userData) return <LoadingWorkspace message="Loading Cooperative Pool Panel..." />;
+  if (authLoading || !userData) return <LoadingWorkspace message="Loading Pool…" />;
 
   const handleDeposit = async () => {
-    const value = Number(depositAmount);
-    if (!value || value <= 0) return alert("Enter a valid amount.");
+    const v = Number(depositAmount);
+    if (!v || v <= 0) return alert("Enter a valid amount.");
     setBusy(true);
     try {
-      // Live on-chain Soroban contract invocation
-      const handler = await getSigningHandler(userData, NETWORK_PASSPHRASE);
-      const amountBig = BigInt(Math.floor(value * 10_000_000));
-      const txHash = await depositPool(userData.publicKey, amountBig, handler);
-      console.log("Soroban Transaction Completed. Hash:", txHash);
-
-      await setDoc(
-        doc(db, "coop_stats", userData.uid),
-        {
-          poolBalance: increment(value),
-          totalDeposited: increment(value),
-        },
-        { merge: true }
-      );
-      await addDoc(collection(db, "transactions"), {
-        type: "pool_deposit",
-        from: userData.uid,
-        to: userData.uid,
-        amount: value,
-        status: "completed",
-        blockchainTxHash: txHash,
-        createdAt: serverTimestamp(),
-      });
-      setDepositAmount("");
-      alert(`Deposit completed on-chain and recorded locally!\nTx Hash: ${txHash}`);
-    } catch (err: any) {
-      console.error(err);
-      alert(`Contract execution failed: ${err.message || err}`);
-    } finally {
-      setBusy(false);
-    }
+      const h = await getSigningHandler(userData, NETWORK_PASSPHRASE);
+      const tx = await depositPool(userData.publicKey, BigInt(Math.floor(v * 1e7)), h);
+      await setDoc(doc(db, "coop_stats", userData.uid), { poolBalance: increment(v), totalDeposited: increment(v) }, { merge: true });
+      await addDoc(collection(db, "transactions"), { type: "pool_deposit", from: userData.uid, to: userData.uid, amount: v, status: "completed", blockchainTxHash: tx, createdAt: serverTimestamp() });
+      setDepositAmount("0");
+      alert(`Deposited!\nTx: ${tx}`);
+    } catch (e: any) { alert(e.message || e); }
+    finally { setBusy(false); }
   };
 
-  const handleApprove = async (request: any) => {
+  const handleApprove = async (req: any) => {
     setBusy(true);
     try {
-      const approvedAmount = Number(request.approvedAmount || request.amount);
-      const interestRateBps = Number(request.interestRate || 3) * 100;
-      const durationDays = Number(request.durationDays || 30);
-
-      // Live on-chain Soroban contract invocation
-      const handler = await getSigningHandler(userData, NETWORK_PASSPHRASE);
-      const amountBig = BigInt(Math.floor(approvedAmount * 10_000_000));
-      const txHash = await releaseCredit(
-        userData.publicKey,
-        request.driverPublicKey,
-        amountBig,
-        BigInt(interestRateBps),
-        durationDays,
-        handler
-      );
-      console.log("Soroban Transaction Completed. Hash:", txHash);
-
-      await updateDoc(doc(db, "fuel_requests", request.id), {
-        status: "active",
-        approvedAt: serverTimestamp(),
-        blockchainTxHash: txHash,
-      });
-      await setDoc(
-        doc(db, "coop_stats", userData.uid),
-        {
-          poolBalance: increment(-approvedAmount),
-          totalReleased: increment(approvedAmount),
-          outstanding: increment(approvedAmount),
-        },
-        { merge: true }
-      );
-      await addDoc(collection(db, "transactions"), {
-        type: "credit_release",
-        from: userData.uid,
-        to: request.driverId,
-        amount: approvedAmount,
-        status: "completed",
-        blockchainTxHash: txHash,
-        createdAt: serverTimestamp(),
-      });
-      alert(`Credit released on-chain and recorded locally!\nTx Hash: ${txHash}`);
-    } catch (err: any) {
-      console.error(err);
-      alert(`Contract execution failed: ${err.message || err}`);
-    } finally {
-      setBusy(false);
-    }
+      const amt = Number(req.approvedAmount || req.amount);
+      const h = await getSigningHandler(userData, NETWORK_PASSPHRASE);
+      const tx = await releaseCredit(userData.publicKey, req.driverPublicKey, BigInt(Math.floor(amt * 1e7)), BigInt(Number(req.interestRate || 3) * 100), Number(req.durationDays || 30), h);
+      await updateDoc(doc(db, "fuel_requests", req.id), { status: "active", approvedAt: serverTimestamp(), blockchainTxHash: tx });
+      await setDoc(doc(db, "coop_stats", userData.uid), { poolBalance: increment(-amt), totalReleased: increment(amt), outstanding: increment(amt) }, { merge: true });
+      await addDoc(collection(db, "transactions"), { type: "credit_release", from: userData.uid, to: req.driverId, amount: amt, status: "completed", blockchainTxHash: tx, createdAt: serverTimestamp() });
+      alert(`Credit released!\nTx: ${tx}`);
+    } catch (e: any) { alert(e.message || e); }
+    finally { setBusy(false); }
   };
 
   const savePolicy = async () => {
@@ -317,280 +141,238 @@ const CoopPool = () => {
     alert("Policy saved.");
   };
 
-  const overdue = requests.filter((request) => {
-    const createdAt = parseTimestamp(request.createdAt);
-    const dueDays = Number(request.durationDays || policy.durationValue);
-    return request.status === "active" && createdAt && Date.now() - createdAt.getTime() > dueDays * dayMs;
+  const pending = requests.filter((r) => r.status === "pending");
+  const overdue = requests.filter((r) => {
+    const t = parseTimestamp(r.createdAt);
+    return r.status === "active" && t && Date.now() - t.getTime() > Number(r.durationDays || policy.durationValue) * dayMs;
   });
+  const outstanding = requests.filter((r) => r.status === "active").reduce((s, r) => s + Number(r.approvedAmount || r.amount || 0), 0);
+  const vaultTotal = Number(userData.vaultBalance || 0) + coopDrivers.reduce((s, d) => s + Number(d.vaultBalance || 0), 0);
 
-  const outstandingDriverBalance = requests
-    .filter((r) => r.status === "active")
-    .reduce((sum, r) => sum + Number(r.approvedAmount || r.amount || 0), 0);
-
-  const totalLockedVaultBalance =
-    Number(userData.vaultBalance || 0) + coopDrivers.reduce((sum, d) => sum + Number(d.vaultBalance || 0), 0);
+  const card = dark ? "bg-[#0A1128] border-white/5" : "bg-white border-[#D5E2EC]";
+  const muted = dark ? "text-gray-500" : "text-gray-400";
+  const heading = dark ? "text-white" : "text-gray-900";
+  const input = `w-full px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#10B981]/40 transition-all ${dark ? "bg-white/5 border-white/8 text-white placeholder-gray-600" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`;
+  const divider = dark ? "divide-white/5" : "divide-gray-100";
 
   return (
     <UserLayout activeTab="coop-pool" userData={userData}>
-      <div style={{ display: "grid", gap: 16 }}>
-        <h2>Cooperative Panel - Fuel Credit Pool</h2>
+      <div className="max-w-4xl mx-auto space-y-6 animate-slide-up">
 
-        {/* Core Stats Grid */}
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-          <StatCard
-            dark={dark}
-            title="Pool Balance"
-            value={`${formatXlm(Number(stats.poolBalance || 0))} XLM`}
-            note="Source of active fuel credits"
-          />
-          <StatCard
-            dark={dark}
-            title="Total Deposited"
-            value={`${formatXlm(Number(stats.totalDeposited || 0))} XLM`}
-            note="Total cooperative inputs"
-          />
-          <StatCard
-            dark={dark}
-            title="Total Released"
-            value={`${formatXlm(Number(stats.totalReleased || 0))} XLM`}
-            note="Cumulative active/paid loans"
-          />
-          <StatCard
-            dark={dark}
-            title="Total Repaid"
-            value={`${formatXlm(Number(stats.totalRepaid || 0))} XLM`}
-            note="Returned to pool"
-          />
-        </div>
-
-        {/* Additional Stats Grid */}
-        <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
-          <StatCard
-            dark={dark}
-            title="Outstanding Balances"
-            value={`${formatXlm(outstandingDriverBalance)} XLM`}
-            note="Unpaid credit on the road"
-          />
-          <StatCard
-            dark={dark}
-            title="Locked Vault Balance"
-            value={`${formatXlm(totalLockedVaultBalance)} XLM`}
-            note="Coop + drivers total locks"
-          />
-          <StatCard
-            dark={dark}
-            title="Overdue Repayments"
-            value={`${overdue.length} Lines`}
-            note="Requires trust score review"
-          />
-        </div>
-
-        {/* Pool Management Form */}
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Pool Management</h3>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input
-              value={depositAmount}
-              onChange={(e) => setDepositAmount(e.target.value)}
-              type="number"
-              placeholder="Deposit amount"
-              style={inputStyle(dark)}
-            />
-            <PrimaryButton dark={dark} onClick={handleDeposit} disabled={busy}>
-              Deposit to Pool
-            </PrimaryButton>
-          </div>
-          <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", marginTop: 14 }}>
-            <input
-              value={policy.maxApprovedAmount}
-              onChange={(e) => setPolicy({ ...policy, maxApprovedAmount: Number(e.target.value) })}
-              type="number"
-              placeholder="Approved limit"
-              style={inputStyle(dark)}
-            />
-            <input
-              value={policy.interestRate}
-              onChange={(e) => setPolicy({ ...policy, interestRate: Number(e.target.value) })}
-              type="number"
-              placeholder="Interest rate"
-              style={inputStyle(dark)}
-            />
-            <input
-              value={policy.durationValue}
-              onChange={(e) => setPolicy({ ...policy, durationValue: Number(e.target.value) })}
-              type="number"
-              placeholder="Duration value"
-              style={inputStyle(dark)}
-            />
-            <select
-              value={policy.durationUnit}
-              onChange={(e) => setPolicy({ ...policy, durationUnit: e.target.value as Policy["durationUnit"] })}
-              style={inputStyle(dark)}
-            >
-              <option value="days">days</option>
-              <option value="weeks">weeks</option>
-              <option value="months">months</option>
-              <option value="years">years</option>
-            </select>
-            <PrimaryButton dark={dark} ghost onClick={savePolicy}>
-              Save Policy
-            </PrimaryButton>
+        {/* ── Header ───────────────────────────────────────────────────────── */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#10B981]/10 border border-[#10B981]/20 mb-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-pulse inline-block" />
+              <span className="text-[10px] font-black uppercase tracking-widest text-[#10B981]">🏢 Cooperative Treasury</span>
+            </div>
+            <h1 className={`text-2xl font-black tracking-tight ${heading}`}>Pool Dashboard</h1>
+            <p className={`text-xs mt-0.5 ${muted}`}>DeFi credit management for your driver fleet</p>
           </div>
         </div>
 
-        {/* Pending Requests & Approvals */}
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Pending Credit Applications</h3>
-          {requests.filter((r) => r.status === "pending").length === 0 ? (
-            <div style={{ color: dark ? "#94a3b8" : "#64748b", fontSize: 13 }}>No pending driver requests at this time.</div>
-          ) : (
-            requests
-              .filter((r) => r.status === "pending")
-              .map((request) => (
-                <div
-                  key={request.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 10,
-                    alignItems: "center",
-                    padding: "12px 0",
-                    borderBottom: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-                  }}
-                >
+        {/* ── Single Hero Stats Strip ───────────────────────────────────────── */}
+        <div className={`rounded-[28px] border p-6 ${card}`}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 divide-x-0 sm:divide-x ${dark ? 'divide-white/5' : 'divide-gray-100'}">
+
+            {/* Pool Balance — hero */}
+            <div className="sm:col-span-1">
+              <p className={`text-[10px] font-black uppercase tracking-widest ${muted}`}>Available Pool</p>
+              <p className="text-3xl font-black text-[#10B981] mt-1 leading-none">
+                {formatXlm(Number(stats.poolBalance || 0))}
+              </p>
+              <p className={`text-[10px] mt-1 ${muted}`}>XLM liquidity</p>
+            </div>
+
+            <div>
+              <p className={`text-[10px] font-black uppercase tracking-widest ${muted}`}>Outstanding</p>
+              <p className={`text-xl font-black mt-1 leading-none ${dark ? "text-white" : "text-gray-900"}`}>
+                {formatXlm(outstanding)}
+              </p>
+              <p className={`text-[10px] mt-1 ${muted}`}>XLM active credit</p>
+            </div>
+
+            <div>
+              <p className={`text-[10px] font-black uppercase tracking-widest ${muted}`}>Vault Reserve</p>
+              <p className={`text-xl font-black mt-1 leading-none ${dark ? "text-white" : "text-gray-900"}`}>
+                {formatXlm(vaultTotal)}
+              </p>
+              <p className={`text-[10px] mt-1 ${muted}`}>XLM locked savings</p>
+            </div>
+
+            <div>
+              <p className={`text-[10px] font-black uppercase tracking-widest ${muted}`}>Overdue</p>
+              <p className={`text-xl font-black mt-1 leading-none ${overdue.length > 0 ? "text-red-500" : dark ? "text-gray-600" : "text-gray-300"}`}>
+                {overdue.length}
+              </p>
+              <p className={`text-[10px] mt-1 ${muted}`}>
+                {overdue.length > 0 ? "lines past due" : "all compliant"}
+              </p>
+            </div>
+          </div>
+
+          {/* Quick deposit inline */}
+          <div className={`mt-5 pt-5 border-t flex flex-col sm:flex-row items-end gap-3 ${dark ? "border-white/5" : "border-gray-100"}`}>
+            <div className="flex-1 w-full">
+              <label className={`block text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Add Liquidity (XLM)</label>
+              <input value={depositAmount} onChange={(e) => setDepositAmount(e.target.value)} type="number" placeholder="Amount in XLM" className={input} />
+            </div>
+            <button onClick={handleDeposit} disabled={busy} className="shrink-0 px-5 py-3 rounded-xl font-black text-xs uppercase tracking-wider bg-[#10B981] text-white hover:bg-[#0E9F6E] disabled:opacity-50 active:scale-95 transition-all">
+              {busy ? "…" : "Deposit"}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Tabbed Right Panel ────────────────────────────────────────────── */}
+        <div className={`rounded-[28px] border ${card} overflow-hidden`}>
+          {/* Tab strip */}
+          <div className={`flex items-center gap-1 p-3 border-b ${dark ? "border-white/5" : "border-gray-100"}`}>
+            <Tab dark={dark} label="Applications" active={activeTab === "requests"} onClick={() => setActiveTab("requests")} badge={pending.length} />
+            <Tab dark={dark} label="Fleet" active={activeTab === "drivers"} onClick={() => setActiveTab("drivers")} badge={coopDrivers.length} />
+            <Tab dark={dark} label="Policy" active={activeTab === "policy"} onClick={() => setActiveTab("policy")} />
+            {overdue.length > 0 && (
+              <span className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-[10px] font-black uppercase">
+                ⚠ {overdue.length} Overdue
+              </span>
+            )}
+          </div>
+
+          {/* ── Tab: Credit Applications ─────────────────────────────────── */}
+          {activeTab === "requests" && (
+            <div className="p-6">
+              {/* Overdue alert strip — only when relevant */}
+              {overdue.length > 0 && (
+                <div className={`mb-5 px-4 py-3 rounded-[16px] border flex items-center gap-3 ${dark ? "bg-red-950/20 border-red-900/30" : "bg-red-50 border-red-100"}`}>
+                  <span className="text-lg">⚠️</span>
                   <div>
-                    <div style={{ fontWeight: 800 }}>{request.driverName}</div>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      Requested: {formatXlm(Number(request.amount))} XLM | Duration: {request.durationValue}{" "}
-                      {request.durationUnit}
-                    </div>
+                    <p className="text-xs font-black text-red-500">{overdue.length} overdue credit line{overdue.length !== 1 ? "s" : ""}</p>
+                    <p className={`text-[10px] mt-0.5 ${muted}`}>Drivers past repayment deadline</p>
                   </div>
-                  <PrimaryButton dark={dark} onClick={() => handleApprove(request)} disabled={busy}>
-                    Approve & Release
-                  </PrimaryButton>
+                  <div className="ml-auto flex flex-col gap-0.5">
+                    {overdue.map((r) => (
+                      <span key={r.id} className="text-[10px] font-bold text-red-400">{r.driverName} — {formatXlm(Number(r.approvedAmount || r.amount))} XLM</span>
+                    ))}
+                  </div>
                 </div>
-              ))
-          )}
-        </div>
+              )}
 
-        {/* Overdue Loans Detail List */}
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0, color: overdue.length > 0 ? "#EF4444" : undefined }}>Overdue Repayments Details</h3>
-          {overdue.length === 0 ? (
-            <div style={{ color: dark ? "#94a3b8" : "#64748b", fontSize: 13 }}>
-              No overdue repayments. Excellent driver health!
-            </div>
-          ) : (
-            overdue.map((request) => (
-              <div
-                key={request.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 10,
-                  alignItems: "center",
-                  padding: "10px 0",
-                  borderBottom: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 800, color: "#EF4444" }}>{request.driverName} (OVERDUE)</div>
-                  <div style={{ fontSize: 12, opacity: 0.75 }}>
-                    Outstanding: {formatXlm(Number(request.approvedAmount || request.amount))} XLM
-                  </div>
+              {pending.length === 0 ? (
+                <div className={`text-center py-12 ${muted}`}>
+                  <p className="text-3xl mb-3">✓</p>
+                  <p className="text-sm font-bold">No pending applications</p>
+                  <p className="text-xs mt-1">Driver credit requests will appear here</p>
                 </div>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#EF4444" }}>Maturity Term Violated</span>
+              ) : (
+                <div className={`divide-y ${divider}`}>
+                  {pending.map((req) => (
+                    <div key={req.id} className="flex items-center justify-between py-4 gap-4">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 shrink-0 rounded-full bg-[#FF6B00]/10 border border-[#FF6B00]/20 flex items-center justify-center text-sm font-black text-[#FF8833]">
+                          {(req.driverName || "D").charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`font-black text-sm truncate ${heading}`}>{req.driverName}</p>
+                          <p className={`text-[10px] mt-0.5 ${muted}`}>
+                            <span className="text-[#34D399] font-bold">{formatXlm(Number(req.amount))} XLM</span>
+                            {" · "}{req.durationValue} {req.durationUnit}
+                            {" · "}{req.interestRate || 3}% p.a.
+                          </p>
+                        </div>
+                      </div>
+                      <button onClick={() => handleApprove(req)} disabled={busy} className="shrink-0 px-4 py-2 rounded-xl font-black text-xs uppercase bg-[#10B981] text-white hover:bg-[#0E9F6E] disabled:opacity-50 active:scale-95 transition-all">
+                        Release
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tab: Driver Fleet ─────────────────────────────────────────── */}
+          {activeTab === "drivers" && (
+            <div className="p-6">
+              {coopDrivers.length === 0 ? (
+                <div className={`text-center py-12 ${muted}`}>
+                  <p className="text-3xl mb-3">🛺</p>
+                  <p className="text-sm font-bold">No drivers registered</p>
+                  <p className="text-xs mt-1">Drivers who join your cooperative will appear here</p>
+                </div>
+              ) : (
+                <div className={`divide-y ${divider}`}>
+                  {coopDrivers.map((d) => {
+                    const score = d.trustScore || 0;
+                    const limit = Math.min(Number(policy.maxApprovedAmount || 100), score * 2);
+                    const bal = driverBalances[d.uid] !== undefined
+                      ? `${formatXlm(Number(driverBalances[d.uid]))} XLM`
+                      : `${formatXlm(Number(d.walletBalance || 0))} XLM`;
+                    const scoreColor = score >= 80 ? "text-[#10B981]" : score <= 30 ? "text-red-500" : "text-amber-500";
+                    return (
+                      <div key={d.uid} className="py-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <div className="w-9 h-9 shrink-0 rounded-full bg-[#FF6B00]/10 border border-[#FF6B00]/20 flex items-center justify-center font-black text-[#FF8833]">
+                              {(d.displayName || "D").charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <p className={`font-black text-sm truncate ${heading}`}>{d.displayName}</p>
+                              <p className={`text-[10px] font-mono truncate mt-0.5 ${muted}`}>
+                                {d.publicKey?.slice(0, 8)}…{d.publicKey?.slice(-8)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className={`font-black text-sm ${scoreColor}`}>{score}/100</p>
+                            <p className={`text-[10px] ${muted}`}>Limit {formatXlm(limit)} XLM</p>
+                          </div>
+                        </div>
+                        <TrustBar score={score} />
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${dark ? "bg-[#10B981]/10 text-[#34D399]" : "bg-emerald-50 text-emerald-700"}`}>
+                            ⚡ {bal}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Tab: Credit Policy ────────────────────────────────────────── */}
+          {activeTab === "policy" && (
+            <div className="p-6 space-y-5 max-w-sm">
+              <div>
+                <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Max Borrow Limit (XLM)</p>
+                <input value={policy.maxApprovedAmount} onChange={(e) => setPolicy({ ...policy, maxApprovedAmount: Number(e.target.value) })} type="number" className={input} />
               </div>
-            ))
-          )}
-        </div>
-
-        {/* Coop Drivers Trust Summary */}
-        <div
-          style={{
-            background: dark ? "#08111f" : "#ffffff",
-            borderRadius: 22,
-            padding: 20,
-            border: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-          }}
-        >
-          <h3 style={{ marginTop: 0 }}>Driver Trust Summaries</h3>
-          {coopDrivers.length === 0 ? (
-            <div style={{ color: dark ? "#94a3b8" : "#64748b", fontSize: 13 }}>
-              No drivers registered under this cooperative yet.
-            </div>
-          ) : (
-            <div style={{ display: "grid", gap: 10 }}>
-              {coopDrivers.map((driver) => {
-                const personalLimit = Math.min(Number(policy.maxApprovedAmount || 100), Number(driver.trustScore || 0) * 2);
-                const balanceString =
-                  driverBalances[driver.uid] !== undefined
-                    ? `${formatXlm(Number(driverBalances[driver.uid]))} XLM`
-                    : `${formatXlm(Number(driver.walletBalance || 0))} XLM (cached)`;
-
-                return (
-                  <div
-                    key={driver.uid}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      padding: "8px 0",
-                      borderBottom: `1px solid ${dark ? "#1f2937" : "#e5e7eb"}`,
-                      fontSize: 14,
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontWeight: 800 }}>{driver.displayName}</div>
-                      <div style={{ fontSize: 11, opacity: 0.6 }}>
-                        Key: {driver.publicKey.slice(0, 8)}...{driver.publicKey.slice(-8)}
-                      </div>
-                      <div style={{ fontSize: 11, color: dark ? "#34d399" : "#059669", fontWeight: 700 }}>
-                        On-Chain Wallet: {balanceString}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div
-                        style={{
-                          fontWeight: 800,
-                          color:
-                            (driver.trustScore || 0) >= 80
-                              ? "#10B981"
-                              : (driver.trustScore || 0) <= 30
-                              ? "#EF4444"
-                              : "#F59E0B",
-                        }}
-                      >
-                        {driver.trustScore || 0}/100 Trust
-                      </div>
-                      <div style={{ fontSize: 11, opacity: 0.6 }}>Limit: {formatXlm(personalLimit)} XLM</div>
-                    </div>
-                  </div>
-                );
-              })}
+              <div>
+                <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Interest Rate (%)</p>
+                <input value={policy.interestRate} onChange={(e) => setPolicy({ ...policy, interestRate: Number(e.target.value) })} type="number" className={input} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Term Length</p>
+                  <input value={policy.durationValue} onChange={(e) => setPolicy({ ...policy, durationValue: Number(e.target.value) })} type="number" className={input} />
+                </div>
+                <div>
+                  <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Unit</p>
+                  <select value={policy.durationUnit} onChange={(e) => setPolicy({ ...policy, durationUnit: e.target.value as Policy["durationUnit"] })} className={`${input} h-[46px]`} style={{ background: dark ? "rgba(255,255,255,0.05)" : "#F9FAFB" }}>
+                    <option value="days">Days</option>
+                    <option value="weeks">Weeks</option>
+                    <option value="months">Months</option>
+                    <option value="years">Years</option>
+                  </select>
+                </div>
+              </div>
+              <button onClick={savePolicy} className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider border transition-all active:scale-95 ${dark ? "border-[#10B981]/25 text-[#34D399] hover:bg-[#10B981]/5" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}>
+                Save Policy
+              </button>
             </div>
           )}
         </div>
+
       </div>
     </UserLayout>
   );
