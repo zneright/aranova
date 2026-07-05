@@ -410,7 +410,7 @@ export async function getVaultBalanceOnChain(ownerAddress: string): Promise<bigi
     ]);
     return result ? BigInt(result) : 0n;
   } catch (err) {
-    console.warn("Blockchain vault balance query failed. Relying on synced database records.");
+    // Normal fallback: user has no active on-chain vault contract storage yet or RPC is offline
     return -1n;
   }
 }

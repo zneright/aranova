@@ -140,6 +140,39 @@ const AuthPage: React.FC = () => {
     fetchCoops();
   }, []);
 
+  // Handle Mobile Wallet SEP-0007 Deep Link Callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pubKey = params.get("pubkey") || params.get("address") || params.get("publicKey");
+    if (pubKey) {
+      const runMobileConnectSubmit = async () => {
+        try {
+          setLoading(true);
+          setConnectPubKey(pubKey);
+          
+          const user = auth.currentUser;
+          if (user) {
+            await setDoc(doc(db, "users", user.uid), {
+              walletCreated: true,
+              publicKey: pubKey,
+              network: "PUBLIC"
+            }, { merge: true });
+            
+            navigate("/user");
+          } else {
+            localStorage.setItem("aranova_pending_mobile_wallet", pubKey);
+            alert("Wallet connected! Please proceed to complete your registration.");
+          }
+        } catch (err) {
+          console.error("Mobile callback setup failed:", err);
+        } finally {
+          setLoading(false);
+        }
+      };
+      runMobileConnectSubmit();
+    }
+  }, [navigate]);
+
   const generatePhrase = () => {
     const words = ["orbit", "planet", "solar", "transit", "yield", "coop", "driver", "route", "token", "ledger", "vault", "trust"];
     return words.sort(() => 0.5 - Math.random()).join(" ");
@@ -164,8 +197,25 @@ const AuthPage: React.FC = () => {
     setLoading(true);
 
     try {
-      let walletModule: any;
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      if (isMobile) {
+        const callbackUrl = `${window.location.origin}/auth?wallet=${walletId}`;
+        const messagePayload = "Aranova Authentication message signature";
+        
+        let deepLink = "";
+        if (walletId === "lobstr") {
+          const sep0007Uri = `web+stellar:sign?message=${encodeURIComponent(messagePayload)}&callback=${encodeURIComponent(callbackUrl)}`;
+          deepLink = `https://lobstr.co/x/?uri=${encodeURIComponent(sep0007Uri)}`;
+        } else {
+          deepLink = `web+stellar:sign?message=${encodeURIComponent(messagePayload)}&callback=${encodeURIComponent(callbackUrl)}`;
+        }
 
+        alert(`Mobile Wallet Connection:\n\nRedirecting to your mobile wallet app (${walletId.toUpperCase()}) to securely approve connection. You will return to the Aranova PWA automatically.`);
+        window.location.href = deepLink;
+        return;
+      }
+
+      let walletModule: any;
       if (walletId === 'freighter') {
         walletModule = new FreighterModule();
       } else if (walletId === 'xbull') {
@@ -178,9 +228,15 @@ const AuthPage: React.FC = () => {
         throw new Error(`The ${walletId} module could not be initialized.`);
       }
 
-      const isAvailable = await walletModule.isAvailable();
+      let isAvailable = false;
+      try {
+        isAvailable = await walletModule.isAvailable();
+      } catch (err) {
+        isAvailable = false;
+      }
+
       if (!isAvailable) {
-        throw new Error(`${walletId.toUpperCase()} is not installed/detected.`);
+        throw new Error(`${walletId.toUpperCase()} extension is not installed/detected in your desktop browser.`);
       }
 
       // Safe Network Auto-Detection with Fallback
@@ -191,7 +247,7 @@ const AuthPage: React.FC = () => {
           if (typeof detected === "string") {
             activeNetwork = detected.toUpperCase();
           } else if (detected && typeof detected.network === "string") {
-            activeNetwork = detected.network.toUpperCase(); // Handles cases where object is returned
+            activeNetwork = detected.network.toUpperCase();
           }
         }
       } catch (networkError) {
