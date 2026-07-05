@@ -1,0 +1,21 @@
+{
+  "short_name": "Aranova",
+  "name": "Aranova Cooperative Fuel Credit Network",
+  "icons": [
+    {
+      "src": "logo_1.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "logo_1.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/user",
+  "background_color": "#0F1117",
+  "theme_color": "#1652C9",
+  "display": "standalone",
+  "orientation": "portrait"
+}

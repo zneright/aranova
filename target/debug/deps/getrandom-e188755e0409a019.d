@@ -1,0 +1,9 @@
+C:\Users\Renz Jericho Buday\aranova\target\debug\deps\getrandom-e188755e0409a019.d: C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\lib.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\util.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error_impls.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\windows.rs
+
+C:\Users\Renz Jericho Buday\aranova\target\debug\deps\libgetrandom-e188755e0409a019.rmeta: C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\lib.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\util.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error_impls.rs C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\windows.rs
+
+C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\lib.rs:
+C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error.rs:
+C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\util.rs:
+C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\error_impls.rs:
+C:\Users\Renz\ Jericho\ Buday\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\getrandom-0.2.11\src\windows.rs:

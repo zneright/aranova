@@ -1,0 +1,81 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Check if the user is logged in
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Check if user is operating on their own document
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 1. Users Collection
+    match /users/{userId} {
+      // Authenticated users can query profiles (e.g. commuters paying drivers, coops loading drivers)
+      allow read: if isAuthenticated();
+      // Only the user themselves can write/edit their profile
+      allow write: if isOwner(userId);
+    }
+
+    // 2. Cooperative Stats Collection
+    match /coop_stats/{coopId} {
+      // Authenticated users can view stats (drivers need coop balance checks)
+      allow read: if isAuthenticated();
+      // Only the cooperative can update its statistics document
+      allow write: if isOwner(coopId);
+    }
+
+    // 3. Fuel Requests / Credit Lines Collection
+    match /fuel_requests/{requestId} {
+      // Authenticated users can retrieve request documents
+      allow read: if isAuthenticated();
+      // Drivers can create requests
+      allow create: if isAuthenticated() && request.resource.data.driverId == request.auth.uid;
+      // Driver or Cooperative admin can approve, pay, or update request statuses
+      allow update: if isAuthenticated() && (
+        resource.data.driverId == request.auth.uid || 
+        resource.data.coopId == request.auth.uid
+      );
+      // Deny direct deletions in production to maintain audit trails
+      allow delete: if false;
+    }
+
+    // 4. Transactions Collection
+    match /transactions/{transactionId} {
+      // Authenticated users can check transaction listings
+      allow read: if isAuthenticated();
+      // Authenticated users can register payments or settlements
+      allow create, update: if isAuthenticated();
+      allow delete: if false;
+    }
+
+    // 5. Vaults Collection
+    match /vaults/{vaultId} {
+      // Authenticated users can view vaults (required for coops to calculate combined vault balances)
+      allow read: if isAuthenticated();
+      // Users can write/lock/redeem their own vaults
+      allow write: if isAuthenticated() && (
+        vaultId == request.auth.uid ||
+        (exists(resource) && resource.data.ownerId == request.auth.uid) ||
+        (request.resource != null && request.resource.data.ownerId == request.auth.uid)
+      );
+    }
+
+    // 6. Global Configuration (Policy Settings)
+    match /app_config/{configId} {
+      // All authenticated users read policies
+      allow read: if isAuthenticated();
+      // Cooperatives can write policy parameters
+      allow write: if isAuthenticated();
+    }
+
+    // 7. Offline Payments Collection (Bluetooth Queue tracking logs)
+    match /offline_payments/{paymentId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}

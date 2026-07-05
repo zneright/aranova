@@ -274,9 +274,9 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {/* Replaced Icon with logo_1.png */}
                 <div style={{ width: 32, height: 32, borderRadius: 8, background: dark ? "rgba(59,130,246,0.15)" : "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <img src="/logo_1.png" alt="Mobilis Logo" style={{ height: 20, width: "auto", objectFit: "contain", filter: dark ? "brightness(0) invert(1)" : "none" }} />
+                  <img src="/logo_1.png" alt="Aranova Logo" style={{ height: 20, width: "auto", objectFit: "contain", filter: dark ? "brightness(0) invert(1)" : "none" }} />
                 </div>
-                <span style={{ color: tk.text, fontWeight: 900, fontSize: 16, letterSpacing: "-0.3px", transition: "color .2s" }}>MOBILIS</span>
+                <span style={{ color: tk.text, fontWeight: 900, fontSize: 16, letterSpacing: "-0.3px", transition: "color .2s" }}>ARANOVA</span>
                 <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "1.5px", color: "#3B82F6", background: dark ? "rgba(59,130,246,0.15)" : "#EFF6FF", padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>ADMIN</span>
               </div>
               {isMobile && (
@@ -308,7 +308,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                 <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#3B82F6,#C0392B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 900, color: "#fff", flexShrink: 0 }}>A</div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: tk.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", transition: "color .2s" }}>Admin User</div>
-                  <div style={{ fontSize: 11, color: tk.sbText, transition: "color .2s" }}>admin@mobilis.ph</div>
+                  <div style={{ fontSize: 11, color: tk.sbText, transition: "color .2s" }}>admin@aranova.ph</div>
                 </div>
                 <a href="/" title="Sign out" style={{ color: tk.sbText, display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, textDecoration: "none", transition: "color .15s, background .15s" }}
                   onMouseEnter={(e) => { e.currentTarget.style.color = "#F87171"; e.currentTarget.style.background = "rgba(248,113,113,0.1)"; }}
@@ -381,7 +381,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                     <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, background: dark ? "#1A1D2E" : "#fff", border: `1px solid ${tk.cardBdr}`, borderRadius: 12, minWidth: 190, boxShadow: "0 8px 30px rgba(0,0,0,0.3)", zIndex: 200, overflow: "hidden" }}>
                       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${tk.cardBdr}` }}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: tk.text }}>Admin User</div>
-                        <div style={{ fontSize: 11, color: tk.textMid, marginTop: 2 }}>admin@mobilis.ph</div>
+                        <div style={{ fontSize: 11, color: tk.textMid, marginTop: 2 }}>admin@aranova.ph</div>
                       </div>
                       {[
                         { icon: (c: string) => <IcoUser c={c} />, label: "Profile" },

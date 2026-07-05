@@ -22,7 +22,6 @@ const IconMenu = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="no
 const IconGrid = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>);
 const IconLock = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>);
 const IconList = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>);
-const IconUser = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>);
 const IconSettings = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>);
 const IconLogout = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
 const IconMoon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>);
@@ -32,7 +31,7 @@ const IconChevronDown = ({ open }: { open: boolean }) => (<svg width="14" height
 // ---------------------------------------------------------------------------
 // Sidebar nav items config
 // ---------------------------------------------------------------------------
-type NavItem = { key: string; label: string; icon: JSX.Element; href: string; };
+type NavItem = { key: string; label: string; icon: React.ReactElement; href: string; };
 
 const MAIN_NAV: NavItem[] = [
   { key: "wallet", label: "Wallet", icon: <IconGrid />, href: "/user" },
@@ -73,6 +72,20 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
   const email = userData?.email || "";
   const initials = displayName !== "Loading..." ? displayName.substring(0, 2).toUpperCase() : "...";
   const roleDisplay = userData?.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "";
+
+  const dynamicMainNav = [...MAIN_NAV];
+  if (userData?.role === "driver") {
+    dynamicMainNav.push({ key: "loans", label: "Driver Panel", icon: <IconList />, href: "/user/loans" });
+  } else if (userData?.role === "cooperative") {
+    dynamicMainNav.push({ key: "coop-pool", label: "Coop Pool", icon: <IconList />, href: "/user/coop-pool" });
+  }
+
+  const dynamicMobileNav = [...MOBILE_NAV];
+  if (userData?.role === "driver") {
+    dynamicMobileNav.splice(2, 0, { key: "loans", label: "Driver Panel", icon: <IconList />, href: "/user/loans" });
+  } else if (userData?.role === "cooperative") {
+    dynamicMobileNav.splice(2, 0, { key: "coop-pool", label: "Coop Pool", icon: <IconList />, href: "/user/coop-pool" });
+  }
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
@@ -220,7 +233,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
             <aside style={{ width: sidebarW, background: t.bgSidebar, borderRight: `1px solid ${t.border}`, display: "flex", flexDirection: "column", flexShrink: 0, transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1)", transform: sidebarOpen ? "translateX(0)" : `translateX(-${sidebarW}px)`, marginLeft: sidebarOpen ? 0 : -sidebarW, position: "sticky", top: 64, height: "calc(100vh - 64px)" }}>
               <div style={{ padding: "24px 16px 8px", display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "1px", color: t.textFaint, textTransform: "uppercase", padding: "0 12px", marginBottom: 8 }}>Main Menu</div>
-                {MAIN_NAV.map((item) => <NavLink key={item.key} item={item} />)}
+                {dynamicMainNav.map((item) => <NavLink key={item.key} item={item} />)}
               </div>
               <div style={{ padding: "16px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: "1px", color: t.textFaint, textTransform: "uppercase", padding: "0 12px", marginBottom: 8 }}>Account</div>
@@ -249,7 +262,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
         {/* ── MOBILE BOTTOM NAVIGATION (FIXED TO BOTTOM OF SCREEN) ────────── */}
         {isMobile && (
           <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 68, background: t.bgHeader, borderTop: `1px solid ${t.border}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)" }}>
-            {MOBILE_NAV.map((item) => {
+            {dynamicMobileNav.map((item) => {
               const isActive = activeTab === item.key;
               return (
                 <a key={item.key} href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, color: isActive ? t.blueText : t.textMuted, textDecoration: "none", fontSize: 11, fontWeight: isActive ? 800 : 600, flex: 1, height: "100%" }}>

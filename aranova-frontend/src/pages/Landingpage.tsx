@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -116,7 +116,7 @@ const STEPS = [
 
 const TESTIMONIALS = [
   {
-    quote: "Before Mobilis, I borrowed from a 5-6 every week just to buy fuel. Now my vault covers it automatically. I kept 15% more of my income last month.",
+    quote: "Before Aranova, I borrowed from a 5-6 every week just to buy fuel. Now my vault covers it automatically. I kept 15% more of my income last month.",
     name: "Rommel D.",
     role: "Tricycle driver, Cavite",
     initials: "RD",
@@ -195,7 +195,6 @@ const TAG_COLORS_DARK: Record<string, { bg: string; text: string; border: string
 const LandingPage: React.FC = () => {
   const [dark, setDark] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 40);
@@ -274,7 +273,7 @@ const LandingPage: React.FC = () => {
         <a href="/" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none", color: c.text }}>
           <img
             src="/logo_1.png"
-            alt="Mobilis Logo"
+            alt="Aranova Logo"
             style={{
               height: 36,
               width: "auto",
@@ -284,7 +283,7 @@ const LandingPage: React.FC = () => {
           />
 
           <span style={{ fontSize: 20, fontWeight: 900, letterSpacing: "-0.5px", color: c.text }}>
-            MOBILIS
+            ARANOVA
           </span>
         </a>
 
@@ -391,7 +390,7 @@ const LandingPage: React.FC = () => {
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, margin: "0 0 1rem", color: c.text }}>Offline-capable credit and payments</h3>
               <p style={{ fontSize: 15, lineHeight: 1.7, color: c.textMid, margin: 0 }}>
-                Mobilis introduces a <strong style={{ color: c.blueText }}>Collateralized Personal Vault</strong>. Payments are authorized via Bluetooth "Scan-and-Beam" cryptograms that work offline, settling on Stellar when signal returns.
+                Aranova introduces a <strong style={{ color: c.blueText }}>Collateralized Personal Vault</strong>. Payments are authorized via Bluetooth "Scan-and-Beam" cryptograms that work offline, settling on Stellar when signal returns.
               </p>
             </div>
           </div>
@@ -438,7 +437,7 @@ const LandingPage: React.FC = () => {
             <div style={{ position: "absolute", left: 27, top: 0, bottom: 0, width: 1, background: `linear-gradient(to bottom, ${c.blue}, transparent)`, opacity: 0.3 }} />
 
             <div style={{ display: "flex", flexDirection: "column", gap: "3rem" }}>
-              {STEPS.map((step, i) => (
+              {STEPS.map((step) => (
                 <div key={step.num} style={{ display: "flex", gap: "2rem", alignItems: "flex-start" }}>
                   {/* Step number circle */}
                   <div style={{ width: 54, height: 54, borderRadius: "50%", background: step.accent, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 13, fontWeight: 900, color: "#fff", zIndex: 1, boxShadow: `0 4px 16px ${step.accent}44` }}>
@@ -507,7 +506,7 @@ const LandingPage: React.FC = () => {
             Get early access
           </h2>
           <p style={{ fontSize: 15, color: c.textMid, margin: "0 0 2rem", lineHeight: 1.6 }}>
-            Be the first to know when Mobilis launches in your city. No spam, unsubscribe any time.
+            Be the first to know when Aranova launches in your city. No spam, unsubscribe any time.
           </p>
           <div style={{ display: "flex", gap: 10, maxWidth: 440, margin: "0 auto" }}>
             <input
@@ -556,7 +555,7 @@ const LandingPage: React.FC = () => {
                     <path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" />
                   </svg>
                 </div>
-                <span style={{ color: "#F9FAFB", fontWeight: 900, fontSize: 16, letterSpacing: "-0.5px" }}>MOBILIS</span>
+                <span style={{ color: "#F9FAFB", fontWeight: 900, fontSize: 16, letterSpacing: "-0.5px" }}>ARANOVA</span>
               </div>
               <p style={{ fontSize: 13, lineHeight: 1.7, margin: 0 }}>
                 Offline transit finance for Southeast Asia's unbanked. Built for the Stellar Community Fund.
@@ -578,7 +577,7 @@ const LandingPage: React.FC = () => {
             ))}
           </div>
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "2rem", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "1rem" }}>
-            <p style={{ fontSize: 13, margin: 0 }}>© 2026 Mobilis. All rights reserved.</p>
+            <p style={{ fontSize: 13, margin: 0 }}>© 2026 Aranova. All rights reserved.</p>
             <div style={{ display: "flex", gap: "1.5rem" }}>
               {["Privacy", "Terms", "Cookies"].map(l => (
                 <a key={l} href="#" style={{ fontSize: 13, color: "#6B7280", textDecoration: "none" }}>{l}</a>
