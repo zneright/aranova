@@ -107,6 +107,53 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
     
     const [busy, setBusy] = useState(false);
     const [offlineQueueLength, setOfflineQueueLength] = useState(0);
+    const [bluetoothNotification, setBluetoothNotification] = useState<any | null>(null);
+
+    // Simulated Bluetooth Low Energy (BLE) Broadcast receiver channel
+    useEffect(() => {
+        try {
+            const bc = new BroadcastChannel("aranova_bluetooth_p2p");
+            bc.onmessage = (msgEvent) => {
+                const data = msgEvent.data;
+                if (data && data.type === "offline_pay") {
+                    const isRecipient = 
+                        data.recipient === userData.publicKey || 
+                        data.recipient === userData.uid || 
+                        data.recipient === userData.email;
+                    
+                    if (isRecipient) {
+                        setBluetoothNotification(data);
+                    }
+                }
+            };
+            return () => bc.close();
+        } catch (e) {
+            console.warn("BroadcastChannel Bluetooth BLE simulation not supported:", e);
+        }
+    }, [userData?.publicKey, userData?.uid, userData?.email]);
+
+    const handleAcceptBluetoothPayment = () => {
+        if (!bluetoothNotification) return;
+        try {
+            const recKey = `aranova_received_offline_${userData.uid}`;
+            const received = JSON.parse(localStorage.getItem(recKey) || "[]") as any[];
+            
+            if (received.some(r => r.nonce === bluetoothNotification.nonce)) {
+                alert("This payment has already been queued.");
+                setBluetoothNotification(null);
+                return;
+            }
+
+            received.push(bluetoothNotification);
+            localStorage.setItem(recKey, JSON.stringify(received));
+            checkOfflineQueue();
+            alert(`Successfully received ${bluetoothNotification.amount} XLM from commuter ${bluetoothNotification.payerName} via Bluetooth! Added to your offline queue.`);
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setBluetoothNotification(null);
+        }
+    };
 
     // Ref to track processed transaction hashes to prevent duplicates
     const processedTxsRef = React.useRef<Record<string, boolean>>({});
@@ -429,6 +476,47 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                 </div>
             )}
             {renderUnifiedDashboard()}
+
+            {bluetoothNotification && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[9999] p-6">
+                    <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${
+                        dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"
+                    }`}>
+                        <div className="relative w-16 h-16 mx-auto mb-4 flex items-center justify-center rounded-full bg-blue-500/10 text-blue-500">
+                            <span className="text-2xl animate-pulse">📡</span>
+                            <div className="absolute w-full h-full rounded-full border border-blue-500/30 animate-ping" />
+                        </div>
+                        <h3 className="text-lg font-black">Proximity BLE Broadcast</h3>
+                        <p className="text-xs text-gray-500 mt-1">Commuter is beaming an offline payment to you.</p>
+
+                        <div className={`p-4 my-6 rounded-2xl text-left text-xs space-y-2 ${
+                            dark ? "bg-white/5 text-gray-300" : "bg-gray-50 text-gray-700"
+                        }`}>
+                            <div><strong>Payer:</strong> {bluetoothNotification.payerName}</div>
+                            <div><strong>Amount:</strong> {bluetoothNotification.amount} XLM</div>
+                            <div><strong>Nonce:</strong> {bluetoothNotification.nonce}</div>
+                            <div><strong>Sig Hash:</strong> {bluetoothNotification.signature.slice(0, 16)}...</div>
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button 
+                                onClick={handleAcceptBluetoothPayment} 
+                                className="flex-1 py-3 rounded-xl font-black text-xs uppercase bg-blue-600 hover:bg-blue-500 text-white active:scale-95 transition-all"
+                            >
+                                Accept & Queue
+                            </button>
+                            <button 
+                                onClick={() => setBluetoothNotification(null)} 
+                                className={`flex-1 py-3 rounded-xl font-bold text-xs uppercase border ${
+                                    dark ? "border-white/10 hover:bg-white/5" : "border-gray-200 hover:bg-gray-50"
+                                }`}
+                            >
+                                Decline
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 

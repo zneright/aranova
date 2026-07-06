@@ -1,10 +1,11 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import UserLayout from "../../components/layout/UserLayout";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import QRCode from "qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 
 const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 250 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -30,6 +31,57 @@ const UserReceive: React.FC = () => {
   const { userData, loading: authLoading } = useAuth();
   const { dark } = useTheme();
   const navigate = useNavigate();
+  const [scanningReceipt, setScanningReceipt] = useState(false);
+
+  useEffect(() => {
+    let scanner: Html5Qrcode | null = null;
+    if (scanningReceipt) {
+      scanner = new Html5Qrcode("reader-receive");
+      scanner
+        .start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          async (decodedText) => {
+            try {
+              const receipt = JSON.parse(decodedText);
+              if (receipt.type !== "offline_pay" || !receipt.payerId || !receipt.amount || !receipt.signature) {
+                throw new Error("Invalid receipt QR format.");
+              }
+              
+              const key = `aranova_received_offline_${userData.uid}`;
+              const received = JSON.parse(localStorage.getItem(key) || "[]");
+              
+              if (received.some((r: any) => r.nonce === receipt.nonce)) {
+                alert("This offline receipt has already been scanned!");
+                scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
+                return;
+              }
+
+              received.push(receipt);
+              localStorage.setItem(key, JSON.stringify(received));
+
+              alert(`Offline Payment QR Scanned!\nAmount: ${receipt.amount} XLM\nPayer: ${receipt.payerName}\n\nThis will sync on-chain once you get online.`);
+              scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
+            } catch (err: any) {
+              console.error("QR decode failed:", err);
+              alert("Error decoding receipt: " + (err.message || err));
+              scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
+            }
+          },
+          () => {}
+        )
+        .catch((err) => {
+          console.error("Scanner start error:", err);
+          alert("Failed to access camera: " + err);
+          setScanningReceipt(false);
+        });
+    }
+    return () => {
+      if (scanner && scanner.isScanning) {
+        scanner.stop().catch(() => undefined);
+      }
+    };
+  }, [scanningReceipt, userData?.uid]);
 
   if (authLoading) return <LoadingWorkspace />;
   if (!userData) return <div className="p-8 text-center text-red-500">Authentication Error</div>;
@@ -94,6 +146,27 @@ const UserReceive: React.FC = () => {
           >
             Save QR Code
           </button>
+
+          {/* Offline Receipt Collect Button (Specifically for Drivers/Receivers) */}
+          <div className="mt-4 pt-4 border-t border-dashed border-gray-200 dark:border-white/10">
+            {scanningReceipt && (
+              <div className="mb-4 p-2 rounded-2xl border border-dashed border-gray-400">
+                <div id="reader-receive" className="w-full h-48 rounded-xl overflow-hidden" />
+              </div>
+            )}
+            <button
+              onClick={() => setScanningReceipt(s => !s)}
+              className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition-all border shadow-sm active:scale-95 ${
+                scanningReceipt 
+                  ? "bg-red-500/10 border-red-500/30 text-red-500" 
+                  : dark 
+                    ? "bg-white/5 border-white/10 text-white hover:bg-white/10" 
+                    : "bg-gray-100 border-gray-200 text-gray-800 hover:bg-gray-200"
+              }`}
+            >
+              {scanningReceipt ? "Cancel Camera Scan" : "Scan Commuter Receipt QR"}
+            </button>
+          </div>
         </div>
       </div>
     </UserLayout>

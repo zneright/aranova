@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
@@ -19,11 +19,32 @@ import {
 import { db } from "../../firebase/config";
 import CryptoJS from "crypto-js";
 import { Html5Qrcode } from "html5-qrcode";
+import QRCode from "qrcode";
 import { payP2P } from "../../services/sorobanService";
 import {
   recalculateAndSyncTrustScore,
   queueBluetoothPayment,
 } from "../../services/aranovaWorkflow";
+
+const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 200 }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (canvasRef.current && text) {
+      QRCode.toCanvas(canvasRef.current, text, { width: size, margin: 2, scale: 10, color: { dark: '#000000', light: '#ffffff' } }, (error) => {
+        if (error) console.error("Error generating QR:", error);
+      });
+    }
+  }, [text, size]);
+
+  return (
+    <div className="flex justify-center my-4">
+      <div className="p-3 bg-white rounded-2xl shadow-lg">
+        <canvas ref={canvasRef} className="rounded-xl max-w-full h-auto block" />
+      </div>
+    </div>
+  );
+};
 
 const UserSend: React.FC = () => {
   const { userData, loading: authLoading } = useAuth();
@@ -41,6 +62,10 @@ const UserSend: React.FC = () => {
   const [pinError, setPinError] = useState("");
   const [pinPurpose, setPinPurpose] = useState("");
   const [pinCallback, setPinCallback] = useState<((secret: string) => void) | null>(null);
+
+  // Offline Receipt QR Modal States
+  const [offlineReceipt, setOfflineReceipt] = useState<any | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
 
   // HTML5 QR Scanner
   useEffect(() => {
@@ -76,34 +101,67 @@ const UserSend: React.FC = () => {
     if (value > Number(userData.walletBalance || 0)) return alert("Insufficient wallet balance.");
 
     if (!navigator.onLine) {
-      const nonce = Math.random().toString(36).substring(7);
-      const payloadObj = {
-        type: "offline_pay",
-        payerId: userData.uid,
-        payerKey: userData.publicKey,
-        recipient,
-        amount: value,
-        nonce,
-        timestamp: Date.now(),
-      };
+      setPinPurpose(`Sign Offline Pay of ${value.toFixed(2)} XLM`);
+      setPinDigits("");
+      setPinError("");
+      setPinCallback(() => async (secret: string) => {
+        const nonce = Math.random().toString(36).substring(7);
+        const timestamp = Date.now();
+        const message = `${userData.uid}:${recipient}:${value}:${nonce}:${timestamp}`;
+        let signature = "";
+        
+        try {
+          const { Keypair } = await import("@stellar/stellar-sdk");
+          const kp = Keypair.fromSecret(secret);
+          const sigBuf = kp.sign(Buffer.from(message));
+          signature = sigBuf.toString("hex");
+        } catch (e) {
+          console.warn("Stellar SDK signing failed, using fallback:", e);
+          signature = CryptoJS.SHA256(message + secret).toString();
+        }
 
-      const key = `aranova_offline_queue_${userData.uid}`;
-      const queued = JSON.parse(localStorage.getItem(key) || "[]");
-      queued.push(payloadObj);
-      localStorage.setItem(key, JSON.stringify(queued));
+        const payloadObj = {
+          type: "offline_pay",
+          payerId: userData.uid,
+          payerName: userData.displayName || "Commuter",
+          payerKey: userData.publicKey || "",
+          recipient,
+          amount: value,
+          nonce,
+          timestamp,
+          message,
+          signature,
+        };
 
-      queueBluetoothPayment(userData.uid, { recipient, amount: value, mode: "bluetooth" });
-      addDoc(collection(db, "offline_payments"), {
-        payerId: userData.uid,
-        recipient,
-        amount: value,
-        channel: "bluetooth",
-        status: "queued-offline",
-        createdAt: serverTimestamp(),
-      }).catch(() => undefined);
+        const key = `aranova_offline_queue_${userData.uid}`;
+        const queued = JSON.parse(localStorage.getItem(key) || "[]");
+        queued.push(payloadObj);
+        localStorage.setItem(key, JSON.stringify(queued));
 
-      alert("Offline payment queued.");
-      navigate("/user");
+        queueBluetoothPayment(userData.uid, { recipient, amount: value, mode: "bluetooth" });
+        
+        // Broadcast over simulated Bluetooth proximity channel
+        try {
+          const bc = new BroadcastChannel("aranova_bluetooth_p2p");
+          bc.postMessage(payloadObj);
+          bc.close();
+        } catch (bcErr) {
+          console.warn("P2P Broadcast channel error:", bcErr);
+        }
+
+        addDoc(collection(db, "offline_payments"), {
+          payerId: userData.uid,
+          recipient,
+          amount: value,
+          channel: "bluetooth",
+          status: "queued-offline",
+          createdAt: serverTimestamp(),
+        }).catch(() => undefined);
+
+        setOfflineReceipt(payloadObj);
+        setShowReceiptModal(true);
+      });
+      setShowPinModal(true);
       return;
     }
 
@@ -361,6 +419,31 @@ const UserSend: React.FC = () => {
                 <button onClick={handlePinSubmit} disabled={pinDigits.length < 4} className={`flex-1 py-3.5 rounded-xl font-black text-xs uppercase disabled:opacity-50 active:scale-95 ${btnColor} ${textColor}`}>Confirm</button>
                 <button onClick={() => { setShowPinModal(false); setPinCallback(null); }} className={`flex-1 py-3.5 rounded-xl font-bold text-xs uppercase border ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-200 hover:bg-gray-50"}`}>Cancel</button>
               </div>
+            </div>
+          </div>
+        )}
+        
+        {showReceiptModal && offlineReceipt && (
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6">
+            <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
+              <span className="text-3xl mb-3 block">📲</span>
+              <h3 className="text-lg font-black">Offline Payment Signed</h3>
+              <p className="text-xs text-gray-500 mt-1">Let the driver scan this receipt QR to collect funds offline.</p>
+              
+              <OfflineQrCanvas text={JSON.stringify(offlineReceipt)} />
+
+              <div className="text-[10px] font-mono text-left bg-black/40 p-3 rounded-xl max-h-24 overflow-y-auto opacity-70">
+                <div><strong>Payer:</strong> {offlineReceipt.payerName}</div>
+                <div><strong>Amount:</strong> {offlineReceipt.amount} XLM</div>
+                <div><strong>Sig:</strong> {offlineReceipt.signature.slice(0, 16)}...</div>
+              </div>
+
+              <button 
+                onClick={() => { setShowReceiptModal(false); setOfflineReceipt(null); navigate("/user"); }} 
+                className={`w-full mt-6 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider ${btnColor} ${textColor} ${btnHover}`}
+              >
+                Close & Return
+              </button>
             </div>
           </div>
         )}
