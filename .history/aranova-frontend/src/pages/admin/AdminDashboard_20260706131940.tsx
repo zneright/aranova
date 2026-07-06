@@ -1,15 +1,15 @@
 // C:\Users\Renz Jericho Buday\aranova\aranova-frontend\src\pages\admin\AdminDashboard.tsx
 
 import { useState, useEffect, useMemo } from "react";
-import {
-  collection,
-  query,
-  where,
-  getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-  addDoc,
+import { 
+  collection, 
+  query, 
+  where, 
+  getDocs, 
+  doc, 
+  updateDoc, 
+  deleteDoc, 
+  addDoc, 
   getDoc,
   setDoc,
   serverTimestamp,
@@ -18,11 +18,10 @@ import {
 } from "firebase/firestore";
 import { db, auth } from "../../firebase/config";
 import AdminLayout, { useAdminTheme, useAdminPage } from "../../components/layout/AdminLayout";
-import AdminLoans from "../../components/admin/AdminLoans";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
 import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
 import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
-
+import { submitStellarPayment, NETWORK_PASSPHRASE } from "../../services/sorobanService";
 
 // ─── DATA SCHEMAS & INTERFACES ──────────────────────────────────────────────
 interface UserProfile {
@@ -65,9 +64,7 @@ interface FuelRequest {
   interestRate?: number;
   gracePeriodDays?: number;
   durationMonths?: number;
-  monthlyRepayment?: number;
   createdAt?: any;
-  driverPublicKey?: string;
 }
 
 interface TransactionRecord {
@@ -114,8 +111,9 @@ const OverviewTab: React.FC<{
         </div>
         <button
           onClick={onRefresh}
-          className={`text-xs font-bold px-4 py-2 rounded-xl transition-all ${dark ? "bg-blue-600/20 text-blue-400 border border-blue-500/20 hover:bg-blue-600/30" : "bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100"
-            }`}
+          className={`text-xs font-bold px-4 py-2 rounded-xl transition-all ${
+            dark ? "bg-blue-600/20 text-blue-400 border border-blue-500/20 hover:bg-blue-600/30" : "bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100"
+          }`}
         >
           Refresh System Stats
         </button>
@@ -207,15 +205,17 @@ const OverviewTab: React.FC<{
                       <div className="flex justify-end gap-2">
                         <button
                           onClick={() => onApprove(user.id)}
-                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-green-600/20 hover:bg-green-600/40 text-green-400 border border-green-600/30" : "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
-                            }`}
+                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                            dark ? "bg-green-600/20 hover:bg-green-600/40 text-green-400 border border-green-600/30" : "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
+                          }`}
                         >
                           Approve Profile
                         </button>
                         <button
                           onClick={() => onDecline(user.id)}
-                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
-                            }`}
+                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                            dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
+                          }`}
                         >
                           Decline Request
                         </button>
@@ -261,7 +261,7 @@ const CoopPoolTab: React.FC<{
     try {
       const amt = Number(depositAmount);
       const randomHash = "0x" + Math.random().toString(16).substr(2, 40);
-
+      
       // Write Pool transaction log
       await addDoc(collection(db, "transactions"), {
         type: "pool_deposit",
@@ -284,17 +284,7 @@ const CoopPoolTab: React.FC<{
       setTxReceipt(`Success! Locked ${amt} USDC in Soroban Liquidity Pool. Tx Hash: ${randomHash}`);
       setDepositAmount("");
       onRefresh();
-    } catch (err: any) {
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed Reserve Deposit",
-          details: `Attempted to deposit ${depositAmount} USDC into Cooperative Pool (Coop ID: ${targetCoop}) but failed: ${err.message || err}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
+    } catch (err) {
       setTxReceipt(`Error: ${err}`);
     }
   };
@@ -302,7 +292,7 @@ const CoopPoolTab: React.FC<{
   return (
     <div className="space-y-8 animate-fadeIn">
       <h1 className="text-3xl font-black">Cooperative Pool reserves</h1>
-
+      
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
           <div className="text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Total Pool Deposits</div>
@@ -328,8 +318,9 @@ const CoopPoolTab: React.FC<{
               <select
                 value={targetCoop}
                 onChange={(e) => setTargetCoop(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               >
                 <option value="">Select a Cooperative...</option>
                 {cooperatives.map(c => (
@@ -344,8 +335,9 @@ const CoopPoolTab: React.FC<{
                 placeholder="e.g. 5000"
                 value={depositAmount}
                 onChange={(e) => setDepositAmount(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               />
             </div>
             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-xl transition-all">
@@ -354,8 +346,9 @@ const CoopPoolTab: React.FC<{
           </form>
 
           {txReceipt && (
-            <div className={`mt-4 p-4 rounded-xl text-xs font-bold ${txReceipt.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-              }`}>
+            <div className={`mt-4 p-4 rounded-xl text-xs font-bold ${
+              txReceipt.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+            }`}>
               {txReceipt}
             </div>
           )}
@@ -378,16 +371,471 @@ const CoopPoolTab: React.FC<{
   );
 };
 
+// 3. Coop Fuel Credit Requests
+const LoanRequestsTab: React.FC<{
+  loans: FuelRequest[];
+  users: UserProfile[];
+  currentAdminEmail: string;
+  onRefresh: () => void;
+}> = ({ loans, users, currentAdminEmail, onRefresh }) => {
+  const { dark } = useAdminTheme();
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  
+  // Modal State for Reviewing Loan
+  const [reviewLoan, setReviewLoan] = useState<FuelRequest | null>(null);
+  const [approvedAmount, setApprovedAmount] = useState("");
+  const [interestRate, setInterestRate] = useState("2.5");
+  const [gracePeriodDays, setGracePeriodDays] = useState("7");
+  const [durationMonths, setDurationMonths] = useState("1");
+
+  const getDriverScore = (driverId: string) => {
+    const profile = users.find(u => u.id === driverId);
+    return profile?.trustScore ?? 0;
+  };
+
+  const getCoopName = (coopId: string) => {
+    const coop = users.find(u => u.id === coopId);
+    return coop?.displayName ?? "Direct Aranova Pool";
+  };
+
+  const openReview = (loan: FuelRequest) => {
+    setReviewLoan(loan);
+    setApprovedAmount(String(loan.amount));
+    setInterestRate("2.5");
+    setGracePeriodDays("7");
+    setDurationMonths("1");
+  };
+
+  const handleIssueOffer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewLoan) return;
+
+    setSuccessMsg(`Simulating Soroban call: Issuing fuel credit offer for ${approvedAmount} XLM...`);
+    try {
+      // Update Fuel Credit Request status to approved with terms
+      await updateDoc(doc(db, "fuel_requests", reviewLoan.id), {
+        status: "approved",
+        approvedAmount: Number(approvedAmount),
+        interestRate: Number(interestRate),
+        gracePeriodDays: Number(gracePeriodDays),
+        durationMonths: Number(durationMonths),
+        approvedAt: serverTimestamp()
+      });
+
+      // Log action to Admin Audit Trail
+      await addDoc(collection(db, "admin_audit_logs"), {
+        adminEmail: currentAdminEmail,
+        action: "Issued Fuel Credit Offer",
+        details: `Issued ${approvedAmount} XLM fuel credit offer to Driver ${reviewLoan.driverName} at ${interestRate}% interest.`,
+        createdAt: serverTimestamp()
+      });
+
+      setSuccessMsg(`Success! Issued custom fuel credit offer to ${reviewLoan.driverName}. Waiting for driver acceptance.`);
+      setReviewLoan(null);
+      onRefresh();
+    } catch (err) {
+      setSuccessMsg(`Error: ${err}`);
+    }
+  };
+
+  const [disbursingId, setDisbursingId] = useState<string | null>(null);
+
+  const getAdminSigningHandler = async (publicKey: string) => {
+    const modules = [new FreighterModule(), new xBullModule(), new LobstrModule()];
+    let activeModule: any = null;
+    
+    for (const mod of modules) {
+      try {
+        if (await mod.isAvailable()) {
+          activeModule = mod;
+          break;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    
+    if (!activeModule) {
+      throw new Error("No Stellar wallet extension detected. Please install Freighter, xBull, or Lobstr.");
+    }
+    
+    return {
+      signWithWallet: async (xdr: string) => {
+        return await activeModule.signTransaction(xdr, {
+          networkPassphrase: NETWORK_PASSPHRASE,
+          publicKey: publicKey,
+        });
+      },
+    };
+  };
+
+  const handleDisburse = async (loan: FuelRequest) => {
+    setDisbursingId(loan.id);
+    setSuccessMsg(`Initiating on-chain disbursal for ${loan.driverName}...`);
+    try {
+      const configSnap = await getDoc(doc(db, "system", "config"));
+      const disbursalAddress = configSnap.data()?.disbursalAddress;
+      if (!disbursalAddress) {
+        throw new Error("No Disbursal Wallet Address configured in System Settings.");
+      }
+
+      if (!loan.driverPublicKey) {
+        throw new Error("Driver does not have a registered Stellar public key.");
+      }
+
+      const signerHandler = await getAdminSigningHandler(disbursalAddress);
+      
+      const amount = String(loan.approvedAmount || loan.amount);
+      const txHash = await submitStellarPayment(
+        disbursalAddress,
+        loan.driverPublicKey,
+        amount,
+        signerHandler
+      );
+      
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "active",
+        disbursedAt: serverTimestamp(),
+        blockchainTxHash: txHash
+      });
+
+      await addDoc(collection(db, "transactions"), {
+        type: "credit_release",
+        from: disbursalAddress,
+        to: loan.driverPublicKey,
+        amount: Number(amount),
+        status: "completed",
+        blockchainTxHash: txHash,
+        createdAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, "admin_audit_logs"), {
+        adminEmail: currentAdminEmail,
+        action: "Disbursed Fuel Credit On-Chain",
+        details: `Disbursed ${amount} XLM to Driver ${loan.driverName}. Tx Hash: ${txHash}`,
+        createdAt: serverTimestamp()
+      });
+
+      setSuccessMsg(`Success! Funds disbursed. Tx Hash: ${txHash}`);
+      onRefresh();
+    } catch (err: any) {
+      console.error(err);
+      setSuccessMsg(`Disbursal Error: ${err.message || err}`);
+    } finally {
+      setDisbursingId(null);
+    }
+  };
+
+  // Group requests: Pending vs Approved (Awaiting Acceptance) vs Awaiting Disbursal vs Active
+  const pendingLoans = loans.filter(l => l.status === "pending");
+  const approvedLoans = loans.filter(l => l.status === "approved");
+  const awaitingDisbursalLoans = loans.filter(l => l.status === "awaiting_disbursal");
+  const activeLoans = loans.filter(l => l.status === "active" || l.status === "repaid");
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <h1 className="text-3xl font-black">Fuel Credit Disbursement queues</h1>
+
+      {successMsg && (
+        <div className={`p-4 rounded-xl text-xs font-bold ${
+          successMsg.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+        }`}>
+          {successMsg}
+        </div>
+      )}
+
+      {/* SECTION 1: Awaiting Admin Review */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Admin Review</span>
+          <span className="text-xs bg-amber-500/20 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded-full font-bold">{pendingLoans.length}</span>
+        </h3>
+        
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Soroban Trust Rating</th>
+                  <th className="p-4 font-semibold">Requested Amount</th>
+                  <th className="p-4 font-semibold text-right">Approval Decision</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {pendingLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No new fuel credit requests awaiting review.</td>
+                  </tr>
+                ) : (
+                  pendingLoans.map(loan => {
+                    const score = getDriverScore(loan.driverId);
+                    return (
+                      <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                        <td className="p-4">
+                          <div className="font-bold text-[15px]">{loan.driverName}</div>
+                          <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-3.5 h-3.5 rounded-full ${score > 700 ? "bg-green-500" : score > 450 ? "bg-amber-500" : "bg-red-500"}`} />
+                            <span className="font-bold">{score}</span>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="font-bold text-[15px]">{loan.amount} XLM</div>
+                          <div className="text-xs opacity-60 mt-1">{loan.purpose}</div>
+                        </td>
+                        <td className="p-4 text-right">
+                          <button
+                            onClick={() => openReview(loan)}
+                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                              dark ? "bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/20" : "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                            }`}
+                          >
+                            Review & Set Terms
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 2: Awaiting Driver Acceptance */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Driver Acceptance</span>
+          <span className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full font-bold">{approvedLoans.length}</span>
+        </h3>
+        
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Issued Offer Details</th>
+                  <th className="p-4 font-semibold">Maturity Terms</th>
+                  <th className="p-4 font-semibold text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {approvedLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No active offers awaiting driver signatures.</td>
+                  </tr>
+                ) : (
+                  approvedLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.amount} XLM</div>
+                        <div className="text-xs opacity-50 mt-0.5 font-semibold text-blue-400">Approved: ${loan.approvedAmount || loan.amount} at {loan.interestRate}% Interest</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-semibold">{loan.gracePeriodDays} Days Grace</div>
+                        <div className="text-xs opacity-50 mt-0.5">Term: {loan.durationMonths} Month(s)</div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-xs font-bold text-amber-500 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full animate-pulse">
+                          Awaiting Driver Signature
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3: Awaiting Admin Disbursal */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Admin Disbursal</span>
+          <span className="text-xs bg-purple-500/20 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded-full font-bold">{awaitingDisbursalLoans.length}</span>
+        </h3>
+        
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Accepted Offer Details</th>
+                  <th className="p-4 font-semibold">Maturity Terms</th>
+                  <th className="p-4 font-semibold text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {awaitingDisbursalLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No approved fuel credits awaiting disbursal.</td>
+                  </tr>
+                ) : (
+                  awaitingDisbursalLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.approvedAmount || loan.amount} XLM</div>
+                        <div className="text-xs opacity-50 mt-0.5 font-semibold text-purple-400">Accepted at {loan.interestRate}% Interest</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-semibold">{loan.gracePeriodDays} Days Grace</div>
+                        <div className="text-xs opacity-50 mt-0.5">Term: {loan.durationMonths} Month(s)</div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <button
+                          onClick={() => handleDisburse(loan)}
+                          disabled={disbursingId === loan.id}
+                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                            dark ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20" : "bg-purple-600 hover:bg-purple-700 text-white shadow-md"
+                          } ${disbursingId === loan.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                        >
+                          {disbursingId === loan.id ? "Signing & Sending..." : "Disburse Funds On-Chain"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 4: Disbursed Ledger History */}
+      <div>
+        <h3 className="text-lg font-bold mb-4">Disbursed Ledger History</h3>
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver</th>
+                  <th className="p-4 font-semibold">Active Vault Term</th>
+                  <th className="p-4 font-semibold">Interest Rate</th>
+                  <th className="p-4 font-semibold text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {activeLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No disbursed fuel credit history found.</td>
+                  </tr>
+                ) : (
+                  activeLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4 font-bold">{loan.driverName}</td>
+                      <td className="p-4 font-semibold">{loan.approvedAmount || loan.amount} XLM</td>
+                      <td className="p-4 font-semibold">{loan.interestRate ?? 2.5}%</td>
+                      <td className="p-4 text-right">
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                          loan.status === "repaid"
+                            ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                            : "bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                        }`}>
+                          {loan.status === "repaid" ? "Repaid" : "Active"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Admin Terms Selection Modal Overlay */}
+      {reviewLoan && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(8,9,14,0.75)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, padding: "1rem" }}>
+          <div className="animate-scale-up" style={{ background: dark ? "#11131E" : "#ffffff", border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.08)"}`, borderRadius: 24, width: "100%", maxWidth: 500, padding: "2.5rem" }}>
+            <h2 className="text-xl font-black mb-4">Set Custom Fuel Credit Terms</h2>
+            <p className="text-xs opacity-60 mb-6 font-semibold">Reviewing credit request submitted by <span className="font-bold text-blue-500">{reviewLoan.driverName}</span>.</p>
+            
+            <form onSubmit={handleIssueOffer} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Requested Amount: {reviewLoan.amount} XLM</label>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Approved Fuel Credit Amount (XLM)</label>
+                <input
+                  type="text"
+                  value={approvedAmount}
+                  onChange={(e) => setApprovedAmount(e.target.value)}
+                  className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Interest Rate (%)</label>
+                  <input
+                    type="text"
+                    value={interestRate}
+                    onChange={(e) => setInterestRate(e.target.value)}
+                    className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Grace Period (Days)</label>
+                  <input
+                    type="text"
+                    value={gracePeriodDays}
+                    onChange={(e) => setGracePeriodDays(e.target.value)}
+                    className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Maturity Duration (Months)</label>
+                <input
+                  type="text"
+                  value={durationMonths}
+                  onChange={(e) => setDurationMonths(e.target.value)}
+                  className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setReviewLoan(null)} className={`flex-1 font-bold py-3 rounded-xl transition-all border ${
+                  dark ? "bg-white/5 hover:bg-white/10 text-white border-white/10" : "bg-gray-50 hover:bg-gray-100 text-gray-800 border-gray-200"
+                }`}>
+                  Cancel
+                </button>
+                <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-xl transition-all">
+                  Issue Credit Offer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // 4. Member Directory
 const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
   const { dark } = useAdminTheme();
   const [filter, setFilter] = useState("");
 
-  const filtered = users.filter(m =>
+  const filtered = users.filter(m => 
     m.role !== "commuter" && m.role !== "admin" &&
     (m.displayName.toLowerCase().includes(filter.toLowerCase()) ||
-      m.email.toLowerCase().includes(filter.toLowerCase()))
+    m.email.toLowerCase().includes(filter.toLowerCase()))
   );
 
   return (
@@ -399,8 +847,9 @@ const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
           placeholder="Filter members..."
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className={`px-4 py-2 rounded-xl border text-sm font-semibold ${dark ? "bg-[#141722] border-white/10 text-white" : "bg-white border-gray-200 text-gray-900"
-            }`}
+          className={`px-4 py-2 rounded-xl border text-sm font-semibold ${
+            dark ? "bg-[#141722] border-white/10 text-white" : "bg-white border-gray-200 text-gray-900"
+          }`}
         />
       </div>
 
@@ -429,16 +878,18 @@ const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
                       <div className="text-xs opacity-50 mt-0.5">{m.email}</div>
                     </td>
                     <td className="p-4">
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${m.role === "cooperative" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : m.role === "driver" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        }`}>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                        m.role === "cooperative" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : m.role === "driver" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                      }`}>
                         {m.role}
                       </span>
                     </td>
                     <td className="p-4 font-mono text-xs opacity-60">{m.publicKey ? `${m.publicKey.substring(0, 8)}...${m.publicKey.substring(m.publicKey.length - 8)}` : "Not Initialized"}</td>
                     <td className="p-4 font-bold">{m.trustScore ?? 0}</td>
                     <td className="p-4 text-right">
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${m.approved ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                        }`}>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                        m.approved ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                      }`}>
                         {m.approved ? "Active" : "Pending Approval"}
                       </span>
                     </td>
@@ -482,7 +933,7 @@ const VaultsTab: React.FC<{
     try {
       // Update Vault Status in Firestore
       await updateDoc(doc(db, "vaults", vault.id), { status: "liquidated" });
-
+      
       // Write Liquidation Event to Transactions
       await addDoc(collection(db, "transactions"), {
         type: "liquidation",
@@ -503,18 +954,8 @@ const VaultsTab: React.FC<{
       });
 
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed Vault Liquidation",
-          details: `Attempted to liquidate Soroban Vault ${vault.id} belonging to Operator ${getVaultOwnerName(vault.ownerId)} but failed: ${err.message || err}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     } finally {
       setLiquidatingId(null);
     }
@@ -552,8 +993,9 @@ const VaultsTab: React.FC<{
                       </td>
                       <td className="p-4 font-bold">${Number(v.lockedAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} XLM</td>
                       <td className="p-4">
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${v.status === "locked" ? "bg-blue-500/15 text-blue-400" : "bg-red-500/15 text-red-400"
-                          }`}>
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${
+                          v.status === "locked" ? "bg-blue-500/15 text-blue-400" : "bg-red-500/15 text-red-400"
+                        }`}>
                           {v.status}
                         </span>
                       </td>
@@ -571,8 +1013,9 @@ const VaultsTab: React.FC<{
                           <button
                             onClick={() => triggerLiquidation(v)}
                             disabled={liquidatingId !== null}
-                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
-                              }`}
+                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${
+                              dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
+                            }`}
                           >
                             {liquidatingId === v.id ? "Clearing Vault..." : "Trigger On-Chain Liquidation"}
                           </button>
@@ -594,7 +1037,121 @@ const VaultsTab: React.FC<{
   );
 };
 
+// 6. Dynamic Trust Scoring
+const CreditScoresTab = () => {
+  const { dark } = useAdminTheme();
+  const [repayWeight, setRepayWeight] = useState(50);
+  const [vaultWeight, setVaultWeight] = useState(30);
+  const [volumeWeight, setVolumeWeight] = useState(20);
+  const [toast, setToast] = useState<string | null>(null);
 
+  const saveWeights = async () => {
+    if (repayWeight + vaultWeight + volumeWeight !== 100) {
+      setToast("Error: Total sum of weights must equal 100%");
+      return;
+    }
+    setToast("Updating Scoring coefficients on Firestore system config...");
+    try {
+      await setDoc(doc(db, "system", "config"), {
+        repayWeight,
+        vaultWeight,
+        volumeWeight,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setToast("Success! Published updated algorithm weights to consensus parameters.");
+    } catch (err) {
+      setToast(`Error: ${err}`);
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <h1 className="text-3xl font-black">Trust Score Pricing Engine</h1>
+
+      {toast && (
+        <div className={`p-4 rounded-xl text-xs font-bold ${
+          toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"
+        }`}>
+          {toast}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Sliders container */}
+        <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <h3 className="font-extrabold text-lg mb-6">Algorithm Weight Adjustments</h3>
+          
+          <div className="space-y-6">
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Repayment History</span>
+                <span>{repayWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={repayWeight}
+                onChange={(e) => setRepayWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Collateral Locks</span>
+                <span>{vaultWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={vaultWeight}
+                onChange={(e) => setVaultWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Telegraphy Sync Volume</span>
+                <span>{volumeWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={volumeWeight}
+                onChange={(e) => setVolumeWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="mt-8 text-xs text-amber-500 font-bold">
+            * Note: Sum of weights must equal 100% to successfully publish to Soroban config parameters. Current sum: {repayWeight + vaultWeight + volumeWeight}%
+          </div>
+        </div>
+
+        {/* Display Card */}
+        <div className={`p-6 rounded-2xl border flex flex-col justify-between ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div>
+            <h3 className="font-extrabold text-lg mb-4">Calculated Algorithm Formula</h3>
+            <div className={`p-4 rounded-xl font-mono text-xs mb-4 ${dark ? "bg-[#0E1016]" : "bg-gray-50"}`}>
+              Score = (RepayRatio × {repayWeight}) + (CollateralRatio × {vaultWeight}) + (TelemetryVol × {volumeWeight})
+            </div>
+            <p className="text-sm opacity-70 leading-relaxed">
+              These weights run inside our Soroban scoring modules. Commuters and Drivers generate scores strictly via cryptographic ledger verification, guaranteeing credit scoring remains immune to bias.
+            </p>
+          </div>
+          <button onClick={saveWeights} className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-xl transition-all">
+            Broadcast Algorithm Weights
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // 7. DeFi Reports & Revenue Tab
 const ReportsTab: React.FC<{ loans: FuelRequest[] }> = ({ loans }) => {
@@ -758,16 +1315,16 @@ const AdminMgmtTab: React.FC<{
   onRefresh: () => void;
 }> = ({ users, currentAdminRole, currentAdminEmail, onRefresh }) => {
   const { dark } = useAdminTheme();
-
+  
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
   const [adminType, setAdminType] = useState<"regular" | "super">("regular");
-
+  
   // Custom limits list
   const [limitApproveProfiles, setLimitApproveProfiles] = useState(true);
   const [limitApproveLoans, setLimitApproveLoans] = useState(true);
   const [limitModifySettings, setLimitModifySettings] = useState(false);
-
+  
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const adminList = useMemo(() => {
@@ -848,8 +1405,9 @@ const AdminMgmtTab: React.FC<{
       <h1 className="text-3xl font-black">Admin Management & Credentials</h1>
 
       {errorMsg && (
-        <div className={`p-4 rounded-xl text-xs font-bold ${errorMsg.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"
-          }`}>
+        <div className={`p-4 rounded-xl text-xs font-bold ${
+          errorMsg.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"
+        }`}>
           {errorMsg}
         </div>
       )}
@@ -858,7 +1416,7 @@ const AdminMgmtTab: React.FC<{
         {/* Create Form */}
         <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
           <h3 className="font-extrabold text-lg mb-4">Provision New Admin Credentials</h3>
-
+          
           {currentAdminRole !== "super" ? (
             <div className="flex flex-col items-center justify-center p-8 border border-red-500/20 bg-red-500/5 rounded-xl text-center">
               <span className="text-2xl mb-2">🔒</span>
@@ -932,8 +1490,9 @@ const AdminMgmtTab: React.FC<{
 
           <div className="space-y-4 max-h-[360px] overflow-y-auto pr-1">
             {adminList.map(adm => (
-              <div key={adm.id} className={`p-4 rounded-xl border flex justify-between items-center ${dark ? "bg-white/5 border-white/10" : "bg-gray-50 border-gray-200"
-                }`}>
+              <div key={adm.id} className={`p-4 rounded-xl border flex justify-between items-center ${
+                dark ? "bg-white/5 border-white/10" : "bg-gray-50 border-gray-200"
+              }`}>
                 <div>
                   <div className="font-bold">{adm.displayName}</div>
                   <div className="text-xs opacity-60 mt-0.5">{adm.email}</div>
@@ -973,12 +1532,12 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
 
   // State Management
   const [network, setNetwork] = useState("TESTNET");
-
+  
   // Custom Stellar Address Mapping (Picked from connected wallets)
   const [disbursalAddress, setDisbursalAddress] = useState("");
   const [repaymentAddress, setRepaymentAddress] = useState("");
   const [yieldAddress, setYieldAddress] = useState("");
-
+  
   // Connected Admin Wallets
   const [connectedWallets, setConnectedWallets] = useState<string[]>([]);
   const [connecting, setConnecting] = useState(false);
@@ -996,12 +1555,12 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
           if (d.disbursalAddress !== undefined) setDisbursalAddress(d.disbursalAddress);
           if (d.repaymentAddress !== undefined) setRepaymentAddress(d.repaymentAddress);
           if (d.yieldAddress !== undefined) setYieldAddress(d.yieldAddress);
-
+          
           if (d.connectedWallets && Array.isArray(d.connectedWallets)) {
             existingWallets = d.connectedWallets;
           }
         }
-
+        
         // Query ALL users with role "admin" to retrieve all registered admin wallets (including signup ones)
         const qAdmins = query(collection(db, "users"), where("role", "==", "admin"));
         const adminsSnap = await getDocs(qAdmins);
@@ -1010,12 +1569,12 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
           const u = dDoc.data();
           if (u.publicKey) registeredAdminKeys.push(u.publicKey);
         });
-
+        
         // Merge them cleanly
         const merged = new Set<string>();
         registeredAdminKeys.forEach(k => merged.add(k));
         existingWallets.forEach(w => merged.add(w));
-
+        
         // Default seeds if everything is empty
         if (merged.size === 0) {
           setConnectedWallets([
@@ -1074,31 +1633,31 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       } else if (walletId === 'lobstr') {
         walletModule = new LobstrModule();
       }
-
+      
       if (!walletModule) throw new Error("Wallet module failed to initialize.");
-
+      
       let isAvailable = false;
       try {
         isAvailable = await walletModule.isAvailable();
       } catch (err) {
         isAvailable = false;
       }
-
+      
       if (!isAvailable) {
         throw new Error(`${walletId.toUpperCase()} extension is not installed or enabled in your browser.`);
       }
-
+      
       const response = await walletModule.getAddress();
       const address = response.address;
       if (!address) throw new Error("Wallet did not return a valid public key.");
-
+      
       // Request cryptographic signature to verify ownership in the extension pop-up
       try {
         const authMessage = `Aranova Administrator Wallet Link\n\nPlease sign to verify ownership of this wallet key.\nTimestamp: ${Date.now()}`;
         const passphrase = network === "TESTNET"
           ? "Test SDF Network ; September 2015"
           : "Public Global Stellar Network ; September 2015";
-
+          
         await walletModule.signMessage(authMessage, {
           networkPassphrase: passphrase,
           publicKey: address
@@ -1106,7 +1665,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       } catch (signError: any) {
         throw new Error(signError?.message || "Signature request rejected or failed.");
       }
-
+      
       // Link to current admin user profile in users collection
       const q = query(collection(db, "users"), where("email", "==", currentAdminEmail), limit(1));
       const snap = await getDocs(q);
@@ -1120,7 +1679,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
         if (prev.includes(address)) return prev;
         return [...prev, address];
       });
-
+      
       // Record successful wallet link to Audit Trail
       await addDoc(collection(db, "admin_audit_logs"), {
         adminEmail: currentAdminEmail,
@@ -1133,7 +1692,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       setShowWalletSelector(false);
     } catch (err: any) {
       console.warn("Wallet connection failed:", err);
-
+      
       // Record failed wallet link attempt to Audit Trail
       try {
         await addDoc(collection(db, "admin_audit_logs"), {
@@ -1157,14 +1716,15 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       <h1 className="text-3xl font-black">System Settings</h1>
 
       {toast && (
-        <div className={`p-4 rounded-xl text-xs font-bold ${toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-          }`}>
+        <div className={`p-4 rounded-xl text-xs font-bold ${
+          toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+        }`}>
           {toast}
         </div>
       )}
 
       <form onSubmit={handleSaveConfig} className="space-y-8">
-
+        
         {/* SECTION 1: WALLET CONNECTOR & NETWORK */}
         <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
           <h3 className="font-extrabold text-lg mb-6 flex items-center gap-2">
@@ -1179,15 +1739,16 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
                   <p className="text-xs text-gray-500 font-semibold italic">No wallets connected. Click below to add one.</p>
                 ) : (
                   connectedWallets.map(w => (
-                    <div key={w} className={`p-2 rounded-lg border font-mono text-[11px] font-bold flex justify-between items-center ${dark ? "bg-[#0E1016] border-white/5 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                      }`}>
+                    <div key={w} className={`p-2 rounded-lg border font-mono text-[11px] font-bold flex justify-between items-center ${
+                      dark ? "bg-[#0E1016] border-white/5 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                    }`}>
                       <span>{w}</span>
                       <span className="text-[9px] bg-blue-500/25 text-blue-400 px-1.5 py-0.5 rounded font-extrabold">Active</span>
                     </div>
                   ))
                 )}
               </div>
-
+              
               {!showWalletSelector ? (
                 <button
                   type="button"
@@ -1239,8 +1800,9 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={network}
                 onChange={(e) => setNetwork(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               >
                 <option value="TESTNET">TESTNET (Stellar Horizon Sandbox)</option>
                 <option value="MAINNET">MAINNET (Stellar Public Network)</option>
@@ -1260,8 +1822,9 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={disbursalAddress}
                 onChange={(e) => setDisbursalAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               >
                 <option value="">Select disbursal account source...</option>
                 {connectedWallets.map(w => (
@@ -1275,8 +1838,9 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={repaymentAddress}
                 onChange={(e) => setRepaymentAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               >
                 <option value="">Select repayment account receiver...</option>
                 {connectedWallets.map(w => (
@@ -1290,8 +1854,9 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={yieldAddress}
                 onChange={(e) => setYieldAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${
+                  dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
+                }`}
               >
                 <option value="">Select yield reserve treasury account...</option>
                 {connectedWallets.map(w => (
@@ -1330,109 +1895,109 @@ const DashboardContent: React.FC<{
   onDecline: (id: string) => void;
   onRefresh: () => void;
   currentAdminRole: "super" | "regular";
-}> = ({
-  pendingUsers,
-  users,
-  vaults,
-  loans,
-  transactions,
+}> = ({ 
+  pendingUsers, 
+  users, 
+  vaults, 
+  loans, 
+  transactions, 
   auditLogs,
-  tvl,
-  yieldEarned,
+  tvl, 
+  yieldEarned, 
   currentAdminEmail,
-  loading,
-  onApprove,
-  onDecline,
+  loading, 
+  onApprove, 
+  onDecline, 
   onRefresh,
   currentAdminRole
 }) => {
-    const { activePage } = useAdminPage();
+  const { activePage } = useAdminPage();
 
-    switch (activePage) {
-      case "dashboard":
-        return (
-          <OverviewTab
-            pendingUsers={pendingUsers}
-            tvl={tvl}
-            yieldEarned={yieldEarned}
-            currentAdminEmail={currentAdminEmail}
-            loading={loading}
-            onApprove={onApprove}
-            onDecline={onDecline}
-            onRefresh={onRefresh}
-            currentAdminRole={currentAdminRole}
-          />
-        );
-      case "coop-pool":
-        return (
-          <CoopPoolTab
-            users={users}
-            transactions={transactions}
-            currentAdminEmail={currentAdminEmail}
-            onRefresh={onRefresh}
-          />
-        );
-      case "loan-requests":
-        return (
-          <AdminLoans
-            loans={loans}
-            users={users}
-            currentAdminEmail={currentAdminEmail}
-            onRefresh={onRefresh}
-          />
-        );
-      case "members":
-        return <MembersTab users={users} />;
-      case "vaults":
-        return (
-          <VaultsTab
-            vaults={vaults}
-            loans={loans}
-            users={users}
-            currentAdminEmail={currentAdminEmail}
-            onRefresh={onRefresh}
-          />
-        );
-      case "reports":
-        return <ReportsTab loans={loans} />;
-      case "disputes":
-        return <DisputesTab />;
-      case "node":
-        return <NodeStatusTab />;
-      case "audit":
-        return <AuditTrailTab auditLogs={auditLogs} />;
-      case "admin-mgmt":
-        return (
-          <AdminMgmtTab
-            users={users}
-            currentAdminRole={currentAdminRole}
-            currentAdminEmail={currentAdminEmail}
-            onRefresh={onRefresh}
-          />
-        );
-      case "settings":
-        return <SettingsTab currentAdminEmail={currentAdminEmail} />;
-      default:
-        return (
-          <OverviewTab
-            pendingUsers={pendingUsers}
-            tvl={tvl}
-            yieldEarned={yieldEarned}
-            currentAdminEmail={currentAdminEmail}
-            loading={loading}
-            onApprove={onApprove}
-            onDecline={onDecline}
-            onRefresh={onRefresh}
-            currentAdminRole={currentAdminRole}
-          />
-        );
-    }
-  };
+  switch (activePage) {
+    case "dashboard":
+      return (
+        <OverviewTab
+          pendingUsers={pendingUsers}
+          tvl={tvl}
+          yieldEarned={yieldEarned}
+          currentAdminEmail={currentAdminEmail}
+          loading={loading}
+          onApprove={onApprove}
+          onDecline={onDecline}
+          onRefresh={onRefresh}
+          currentAdminRole={currentAdminRole}
+        />
+      );
+    case "coop-pool":
+      return (
+        <CoopPoolTab 
+          users={users}
+          transactions={transactions}
+          currentAdminEmail={currentAdminEmail}
+          onRefresh={onRefresh}
+        />
+      );
+    case "loan-requests":
+      return (
+        <LoanRequestsTab 
+          loans={loans}
+          users={users}
+          currentAdminEmail={currentAdminEmail}
+          onRefresh={onRefresh}
+        />
+      );
+    case "members":
+      return <MembersTab users={users} />;
+    case "vaults":
+      return (
+        <VaultsTab 
+          vaults={vaults}
+          loans={loans}
+          users={users}
+          currentAdminEmail={currentAdminEmail}
+          onRefresh={onRefresh}
+        />
+      );
+    case "reports":
+      return <ReportsTab loans={loans} />;
+    case "disputes":
+      return <DisputesTab />;
+    case "node":
+      return <NodeStatusTab />;
+    case "audit":
+      return <AuditTrailTab auditLogs={auditLogs} />;
+    case "admin-mgmt":
+      return (
+        <AdminMgmtTab 
+          users={users}
+          currentAdminRole={currentAdminRole}
+          currentAdminEmail={currentAdminEmail}
+          onRefresh={onRefresh}
+        />
+      );
+    case "settings":
+      return <SettingsTab currentAdminEmail={currentAdminEmail} />;
+    default:
+      return (
+        <OverviewTab
+          pendingUsers={pendingUsers}
+          tvl={tvl}
+          yieldEarned={yieldEarned}
+          currentAdminEmail={currentAdminEmail}
+          loading={loading}
+          onApprove={onApprove}
+          onDecline={onDecline}
+          onRefresh={onRefresh}
+          currentAdminRole={currentAdminRole}
+        />
+      );
+  }
+};
 
 // ─── ADMIN DASHBOARD ROOT ────────────────────────────────────────────────────
 const AdminDashboard = () => {
   const [activePage, setActivePage] = useState("dashboard");
-
+  
   // Simulated RBAC State: allows toggling Super vs Regular Admin for test verification
   const [currentAdminRole, setCurrentAdminRole] = useState<"super" | "regular">("super");
   const currentAdminEmail = auth.currentUser?.email || "admin@aranova.ph";
@@ -1449,7 +2014,7 @@ const AdminDashboard = () => {
   const fetchSystemData = async () => {
     try {
       setLoading(true);
-
+      
       // 1. Fetch Users
       const usersSnap = await getDocs(collection(db, "users"));
       const usersList: UserProfile[] = [];
@@ -1466,8 +2031,8 @@ const AdminDashboard = () => {
       });
       setVaults(vaultsList);
 
-      // 3. Fetch Loans
-      const loansSnap = await getDocs(query(collection(db, "fuel_requests"), where("type", "==", "loan")));
+      // 3. Fetch Loans / Fuel Requests
+      const loansSnap = await getDocs(collection(db, "fuel_requests"));
       const loansList: FuelRequest[] = [];
       loansSnap.forEach(d => {
         loansList.push({ id: d.id, ...d.data() } as FuelRequest);
@@ -1489,13 +2054,13 @@ const AdminDashboard = () => {
         auditList.push({ id: d.id, ...d.data() } as AuditLog);
       });
       // Sort logs by date desc if needed (or do it locally)
-      auditList.sort((a, b) => {
+      auditList.sort((a,b) => {
         const tA = a.createdAt?.seconds || 0;
         const tB = b.createdAt?.seconds || 0;
         return tB - tA;
       });
       setAuditLogs(auditList);
-
+      
     } catch (error) {
       console.error("Error loading system metrics:", error);
     } finally {
@@ -1513,7 +2078,7 @@ const AdminDashboard = () => {
         auditList.push({ id: d.id, ...d.data() } as AuditLog);
       });
       // Sort desc
-      auditList.sort((a, b) => {
+      auditList.sort((a,b) => {
         const tA = a.createdAt?.seconds || 0;
         const tB = b.createdAt?.seconds || 0;
         return tB - tA;
@@ -1554,7 +2119,7 @@ const AdminDashboard = () => {
         approved: true,
         coopStatus: "approved"
       });
-
+      
       // Log event
       await addDoc(collection(db, "admin_audit_logs"), {
         adminEmail: currentAdminEmail,
@@ -1564,18 +2129,8 @@ const AdminDashboard = () => {
       });
 
       fetchSystemData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error approving user:", error);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed User Approval",
-          details: `Attempted to approve user ${targetProfile?.displayName || userId} but failed: ${error.message || error}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     }
   };
 
@@ -1585,7 +2140,7 @@ const AdminDashboard = () => {
     if (!window.confirm("Are you sure you want to decline and delete this application?")) return;
     try {
       await deleteDoc(doc(db, "users", userId));
-
+      
       // Log event
       await addDoc(collection(db, "admin_audit_logs"), {
         adminEmail: currentAdminEmail,
@@ -1595,18 +2150,8 @@ const AdminDashboard = () => {
       });
 
       fetchSystemData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error declining user:", error);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed User Decline",
-          details: `Attempted to decline user ${targetProfile?.displayName || userId} but failed: ${error.message || error}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     }
   };
 
@@ -1615,14 +2160,14 @@ const AdminDashboard = () => {
       {/* Visual Role Switcher for Demo testing */}
       <div className="mb-4 flex items-center justify-end gap-2 text-xs font-bold">
         <span>Admin Mode:</span>
-        <button
-          onClick={() => setCurrentAdminRole("super")}
+        <button 
+          onClick={() => setCurrentAdminRole("super")} 
           className={`px-3 py-1 rounded-lg border ${currentAdminRole === "super" ? "bg-blue-600 text-white border-blue-500" : "bg-white/5 border-white/10 text-gray-400"}`}
         >
           Super Admin
         </button>
-        <button
-          onClick={() => setCurrentAdminRole("regular")}
+        <button 
+          onClick={() => setCurrentAdminRole("regular")} 
           className={`px-3 py-1 rounded-lg border ${currentAdminRole === "regular" ? "bg-amber-600 text-white border-amber-500" : "bg-white/5 border-white/10 text-gray-400"}`}
         >
           Regular Admin (Limited)

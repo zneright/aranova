@@ -32,16 +32,26 @@ self.addEventListener("activate", (e) => {
 
 // Fetch Event (Network-first fallback to Cache)
 self.addEventListener("fetch", (e) => {
-  // Only handle GET requests and ignore chrome-extension URLs
-  if (e.request.method !== "GET" || e.request.url.startsWith("chrome-extension://")) {
-    return;
+  const url = new URL(e.request.url);
+
+  // Ignore non-GET requests, Chrome extensions, Firestore, Stellar APIs, and Vite dev server requests
+  if (
+    e.request.method !== "GET" ||
+    url.protocol.startsWith("chrome-extension") ||
+    url.hostname.includes("firestore.googleapis.com") ||
+    url.hostname.includes("stellar.org") ||
+    url.pathname.includes("@vite") ||
+    url.pathname.includes("@react-refresh") ||
+    url.pathname.includes("node_modules")
+  ) {
+    return; // Let the browser handle it normally
   }
 
   e.respondWith(
     fetch(e.request)
       .then((res) => {
-        // Cache new successful requests
-        if (res.status === 200) {
+        // Cache new successful requests (only valid, non-opaque HTTP responses)
+        if (res && res.status === 200 && res.type === "basic") {
           const resCopy = res.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(e.request, resCopy);
@@ -53,10 +63,14 @@ self.addEventListener("fetch", (e) => {
         // Fallback to cache if network fails
         return caches.match(e.request).then((cachedRes) => {
           if (cachedRes) return cachedRes;
-          // Return offline fallback if not cached
+          
+          // Return offline fallback for navigation requests
           if (e.request.mode === "navigate") {
             return caches.match("/index.html");
           }
+          
+          // CRITICAL: Always return a valid Response to prevent "Failed to convert value to 'Response'" errors
+          return new Response("", { status: 503, statusText: "Service Unavailable Offline" });
         });
       })
   );

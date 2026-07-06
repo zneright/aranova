@@ -60,8 +60,19 @@ const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, 
   if (!type) return null;
   const isTerms = type === "terms";
   const content = isTerms
-    ? [{ title: "1. Acceptance of Terms", body: "By creating an account, you agree to these Terms of Service." }]
-    : [{ title: "1. Information We Collect", body: "We collect your email and Stellar Public Key. Your Secret Key is encrypted locally and never sent to our servers in plain text." }];
+    ? [
+        { title: "1. Decentralized Non-Custodial Agreement", body: "Aranova operates as a fully decentralized, non-custodial financial platform deployed on the Stellar blockchain network. By generating a wallet or connecting an existing public key, you acknowledge that Aranova possesses no direct access to, or custody of, your private key, seed phrases, or transaction PIN code. Keys are stored local-only in encrypted browser structures using AES-256." },
+        { title: "2. Role: Commuter Obligations", body: "Commuters utilize the Scan-and-Beam protocol to pay transit fares. Commuters authorize transaction cryptograms signed locally with their private key, and agree that once these signatures are broadcasted to the Stellar network by a receiving driver or node, the transaction is irreversible and permanently recorded on the blockchain ledger." },
+        { title: "3. Role: Driver Microcredit & Collateral Vaults", body: "Drivers may lock personal assets (XLM/USDC) inside time-locked Soroban smart contract vaults to build their credit rating. By requesting microloans from their Cooperative, drivers explicitly agree that their locked vault assets serve as debt collateral. In the event of default or overdue loan status past the defined settlement date, the system is authorized to trigger on-chain collateral liquidation to reconcile the outstanding debt." },
+        { title: "4. Role: Cooperative Fund Responsibilities", body: "Approved Cooperatives oversee microloan allocations from their pooled on-chain reserves. Cooperatives are responsible for verifying the credentials of linked drivers. Interests and repayment fees accrued from driver settlements are routed directly to the Cooperative's public Stellar wallet via automated smart contracts." },
+        { title: "5. Offline Bluetooth Transmission", body: "All offline transactions signed in zones without internet cellular service represent binding payment instructions. Drivers agree to sync their device's transaction queues to Stellar Horizon endpoints within 72 hours of receiving offline payments." }
+      ]
+    : [
+        { title: "1. Zero Personal Data Collection", body: "We do not track, collect, or store any personally identifiable information (PII). Aranova has no centralized databases containing your name, physical address, geographical coordinate tracking, device identifiers, IP addresses, or transit route histories." },
+        { title: "2. Local Device Sandboxed Storage", body: "All transaction logs, secret key caches, recovery seed phrases, and offline Bluetooth transit payment queues are stored strictly within the user's localized browser storage (localStorage). This data remains inside your device's sandboxed environment and is cleared if the browser memory or cache is wiped." },
+        { title: "3. Public Ledger Disclosures", body: "Because Aranova operates on the public Stellar network, your public wallet address, transaction amounts, timestamps, deposit vaults, and credit borrowing logs are publicly visible. This information is immutable and cannot be deleted, modified, or scrubbed." },
+        { title: "4. Third-Party Analytics & Cookies", body: "Aranova uses no third-party marketing cookies, trackers, or analytical hooks. All interface operations run serverless, communicating directly with Firebase Auth for basic account syncing and Stellar Horizon nodes for blockchain ledger operations." }
+      ];
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(10,15,30,0.7)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, padding: "1rem" }} onClick={onClose}>
@@ -447,6 +458,11 @@ const AuthPage: React.FC = () => {
       }
 
       else {
+        if (form.email.toLowerCase().includes("admin") || role === "admin") {
+          setErrors({ email: "Admin accounts can only be created inside the Admin Control panel by a Super Administrator." });
+          setLoading(false);
+          return;
+        }
         const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
         const user = userCredential.user;
         const isApproved = role === "commuter";
@@ -470,7 +486,7 @@ const AuthPage: React.FC = () => {
           setMode("login");
           setAuthSuccess(true);
         } else {
-          if (form.email.includes("admin") || role === "admin") navigate("/admin");
+          if (form.email.includes("admin") || (role as string) === "admin") navigate("/admin");
           else navigate("/user");
         }
       }
@@ -564,7 +580,7 @@ const AuthPage: React.FC = () => {
         {/* ── LEFT PANEL — Illustration ── */}
         <div className="auth-left">
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: "2rem" }}>
-            <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 80, width: "auto", objectFit: "contain" }} />
+            <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 100, width: 100, objectFit: "contain" }} />
           </div>
           <div style={{ textAlign: "center", marginBottom: "1.5rem", zIndex: 1 }}>
             <h2 style={{ color: "#fff", fontSize: 32, fontWeight: 900, letterSpacing: "-1px", margin: "0 0 12px", lineHeight: 1.2 }}>Finance that works<br /><span style={{ color: "#FCD34D" }}>even without signal</span></h2>
@@ -756,7 +772,12 @@ const AuthPage: React.FC = () => {
                     <div style={{ marginBottom: "1.5rem" }}>
                       <label style={{ display: "flex", gap: 12, alignItems: "flex-start", fontSize: 14, color: "#4B5563", cursor: "pointer", lineHeight: 1.4 }}>
                         <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ marginTop: 2, accentColor: "#1652C9", width: 18, height: 18 }} />
-                        <span>I agree to the <span style={{ color: "#1652C9", fontWeight: 700 }} onClick={(e) => { e.preventDefault(); setLegal("terms"); }}>Terms of Service</span>.</span>
+                        <span>
+                          I agree to the{" "}
+                          <span style={{ color: "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("terms"); }}>Terms of Service</span>
+                          {" "}and{" "}
+                          <span style={{ color: "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("privacy"); }}>Privacy Policy</span>.
+                        </span>
                       </label>
                       {errors.terms && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.terms}</p>}
                     </div>
@@ -873,6 +894,8 @@ const AuthPage: React.FC = () => {
                     )}
                   </>
                 )}
+
+
 
                 {/* ─── Main Submission Button ─── */}
                 {(!authSuccess || (walletMode === "create" && verificationStep === 4) || (walletMode === "connect" && connectPubKey.length === 56)) && (

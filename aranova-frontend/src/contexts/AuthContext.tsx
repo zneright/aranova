@@ -24,25 +24,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
+        let unsubDoc: (() => void) | null = null;
+        
+        const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+            if (unsubDoc) {
+                unsubDoc();
+                unsubDoc = null;
+            }
+
             if (user) {
                 setCurrentUser(user);
                 // Listen to the user's document in Firestore in real-time
-                const unsubDoc = onSnapshot(doc(db, "users", user.uid), (doc) => {
+                unsubDoc = onSnapshot(doc(db, "users", user.uid), (doc) => {
                     setUserData(doc.data() || null);
                     setLoading(false);
                 }, (error) => {
                     console.error("Firestore snapshot error:", error);
                     setLoading(false);
                 });
-                return () => unsubDoc();
             } else {
                 setCurrentUser(null);
                 setUserData(null);
                 setLoading(false);
             }
         });
-        return unsubscribe;
+        
+        return () => {
+            unsubscribeAuth();
+            if (unsubDoc) unsubDoc();
+        };
     }, []);
 
     return (

@@ -18,11 +18,10 @@ import {
 } from "firebase/firestore";
 import { db, auth } from "../../firebase/config";
 import AdminLayout, { useAdminTheme, useAdminPage } from "../../components/layout/AdminLayout";
-import AdminLoans from "../../components/admin/AdminLoans";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
 import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
 import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
-
+import { submitStellarPayment, NETWORK_PASSPHRASE } from "../../services/sorobanService";
 
 // ─── DATA SCHEMAS & INTERFACES ──────────────────────────────────────────────
 interface UserProfile {
@@ -65,9 +64,7 @@ interface FuelRequest {
   interestRate?: number;
   gracePeriodDays?: number;
   durationMonths?: number;
-  monthlyRepayment?: number;
   createdAt?: any;
-  driverPublicKey?: string;
 }
 
 interface TransactionRecord {
@@ -284,17 +281,7 @@ const CoopPoolTab: React.FC<{
       setTxReceipt(`Success! Locked ${amt} USDC in Soroban Liquidity Pool. Tx Hash: ${randomHash}`);
       setDepositAmount("");
       onRefresh();
-    } catch (err: any) {
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed Reserve Deposit",
-          details: `Attempted to deposit ${depositAmount} USDC into Cooperative Pool (Coop ID: ${targetCoop}) but failed: ${err.message || err}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
+    } catch (err) {
       setTxReceipt(`Error: ${err}`);
     }
   };
@@ -378,6 +365,456 @@ const CoopPoolTab: React.FC<{
   );
 };
 
+// 3. Coop Fuel Credit Requests
+const LoanRequestsTab: React.FC<{
+  loans: FuelRequest[];
+  users: UserProfile[];
+  currentAdminEmail: string;
+  onRefresh: () => void;
+}> = ({ loans, users, currentAdminEmail, onRefresh }) => {
+  const { dark } = useAdminTheme();
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Modal State for Reviewing Loan
+  const [reviewLoan, setReviewLoan] = useState<FuelRequest | null>(null);
+  const [approvedAmount, setApprovedAmount] = useState("");
+  const [interestRate, setInterestRate] = useState("2.5");
+  const [gracePeriodDays, setGracePeriodDays] = useState("7");
+  const [durationMonths, setDurationMonths] = useState("1");
+
+  const getDriverScore = (driverId: string) => {
+    const profile = users.find(u => u.id === driverId);
+    return profile?.trustScore ?? 0;
+  };
+
+  const getCoopName = (coopId: string) => {
+    const coop = users.find(u => u.id === coopId);
+    return coop?.displayName ?? "Direct Aranova Pool";
+  };
+
+  const openReview = (loan: FuelRequest) => {
+    setReviewLoan(loan);
+    setApprovedAmount(String(loan.amount));
+    setInterestRate("2.5");
+    setGracePeriodDays("7");
+    setDurationMonths("1");
+  };
+
+  const handleIssueOffer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewLoan) return;
+
+    setSuccessMsg(`Simulating Soroban call: Issuing fuel credit offer for ${approvedAmount} XLM...`);
+    try {
+      // Update Fuel Credit Request status to approved with terms
+      await updateDoc(doc(db, "fuel_requests", reviewLoan.id), {
+        status: "approved",
+        approvedAmount: Number(approvedAmount),
+        interestRate: Number(interestRate),
+        gracePeriodDays: Number(gracePeriodDays),
+        durationMonths: Number(durationMonths),
+        approvedAt: serverTimestamp()
+      });
+
+      // Log action to Admin Audit Trail
+      await addDoc(collection(db, "admin_audit_logs"), {
+        adminEmail: currentAdminEmail,
+        action: "Issued Fuel Credit Offer",
+        details: `Issued ${approvedAmount} XLM fuel credit offer to Driver ${reviewLoan.driverName} at ${interestRate}% interest.`,
+        createdAt: serverTimestamp()
+      });
+
+      setSuccessMsg(`Success! Issued custom fuel credit offer to ${reviewLoan.driverName}. Waiting for driver acceptance.`);
+      setReviewLoan(null);
+      onRefresh();
+    } catch (err) {
+      setSuccessMsg(`Error: ${err}`);
+    }
+  };
+
+  const [disbursingId, setDisbursingId] = useState<string | null>(null);
+
+  const getAdminSigningHandler = async (publicKey: string) => {
+    const modules = [new FreighterModule(), new xBullModule(), new LobstrModule()];
+    let activeModule: any = null;
+
+    for (const mod of modules) {
+      try {
+        if (await mod.isAvailable()) {
+          activeModule = mod;
+          break;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (!activeModule) {
+      throw new Error("No Stellar wallet extension detected. Please install Freighter, xBull, or Lobstr.");
+    }
+
+    return {
+      signWithWallet: async (xdr: string) => {
+        return await activeModule.signTransaction(xdr, {
+          networkPassphrase: NETWORK_PASSPHRASE,
+          publicKey: publicKey,
+        });
+      },
+    };
+  };
+
+  const handleDisburse = async (loan: FuelRequest) => {
+    setDisbursingId(loan.id);
+    setSuccessMsg(`Initiating on-chain disbursal for ${loan.driverName}...`);
+    try {
+      const configSnap = await getDoc(doc(db, "system", "config"));
+      const disbursalAddress = configSnap.data()?.disbursalAddress;
+      if (!disbursalAddress) {
+        throw new Error("No Disbursal Wallet Address configured in System Settings.");
+      }
+
+      if (!loan.driverPublicKey) {
+        throw new Error("Driver does not have a registered Stellar public key.");
+      }
+
+      const signerHandler = await getAdminSigningHandler(disbursalAddress);
+
+      const amount = String(loan.approvedAmount || loan.amount);
+      const txHash = await submitStellarPayment(
+        disbursalAddress,
+        loan.driverPublicKey,
+        amount,
+        signerHandler
+      );
+
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "active",
+        disbursedAt: serverTimestamp(),
+        blockchainTxHash: txHash
+      });
+
+      await addDoc(collection(db, "transactions"), {
+        type: "credit_release",
+        from: disbursalAddress,
+        to: loan.driverPublicKey,
+        amount: Number(amount),
+        status: "completed",
+        blockchainTxHash: txHash,
+        createdAt: serverTimestamp(),
+      });
+
+      await addDoc(collection(db, "admin_audit_logs"), {
+        adminEmail: currentAdminEmail,
+        action: "Disbursed Fuel Credit On-Chain",
+        details: `Disbursed ${amount} XLM to Driver ${loan.driverName}. Tx Hash: ${txHash}`,
+        createdAt: serverTimestamp()
+      });
+
+      setSuccessMsg(`Success! Funds disbursed. Tx Hash: ${txHash}`);
+      onRefresh();
+    } catch (err: any) {
+      console.error(err);
+      setSuccessMsg(`Disbursal Error: ${err.message || err}`);
+    } finally {
+      setDisbursingId(null);
+    }
+  };
+
+  // Group requests: Pending vs Approved (Awaiting Acceptance) vs Awaiting Disbursal vs Active
+  const pendingLoans = loans.filter(l => l.status === "pending");
+  const approvedLoans = loans.filter(l => l.status === "approved");
+  const awaitingDisbursalLoans = loans.filter(l => l.status === "awaiting_disbursal");
+  const activeLoans = loans.filter(l => l.status === "active" || l.status === "repaid");
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <h1 className="text-3xl font-black">Fuel Credit Disbursement queues</h1>
+
+      {successMsg && (
+        <div className={`p-4 rounded-xl text-xs font-bold ${successMsg.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+          }`}>
+          {successMsg}
+        </div>
+      )}
+
+      {/* SECTION 1: Awaiting Admin Review */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Admin Review</span>
+          <span className="text-xs bg-amber-500/20 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded-full font-bold">{pendingLoans.length}</span>
+        </h3>
+
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Soroban Trust Rating</th>
+                  <th className="p-4 font-semibold">Requested Amount</th>
+                  <th className="p-4 font-semibold text-right">Approval Decision</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {pendingLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No new fuel credit requests awaiting review.</td>
+                  </tr>
+                ) : (
+                  pendingLoans.map(loan => {
+                    const score = getDriverScore(loan.driverId);
+                    return (
+                      <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                        <td className="p-4">
+                          <div className="font-bold text-[15px]">{loan.driverName}</div>
+                          <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                        </td>
+                        <td className="p-4">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-3.5 h-3.5 rounded-full ${score > 700 ? "bg-green-500" : score > 450 ? "bg-amber-500" : "bg-red-500"}`} />
+                            <span className="font-bold">{score}</span>
+                          </div>
+                        </td>
+                        <td className="p-4">
+                          <div className="font-bold text-[15px]">{loan.amount} XLM</div>
+                          <div className="text-xs opacity-60 mt-1">{loan.purpose}</div>
+                        </td>
+                        <td className="p-4 text-right">
+                          <button
+                            onClick={() => openReview(loan)}
+                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/20" : "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                              }`}
+                          >
+                            Review & Set Terms
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 2: Awaiting Driver Acceptance */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Driver Acceptance</span>
+          <span className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/20 px-2 py-0.5 rounded-full font-bold">{approvedLoans.length}</span>
+        </h3>
+
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Issued Offer Details</th>
+                  <th className="p-4 font-semibold">Maturity Terms</th>
+                  <th className="p-4 font-semibold text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {approvedLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No active offers awaiting driver signatures.</td>
+                  </tr>
+                ) : (
+                  approvedLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.amount} XLM</div>
+                        <div className="text-xs opacity-50 mt-0.5 font-semibold text-blue-400">Approved: ${loan.approvedAmount || loan.amount} at {loan.interestRate}% Interest</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-semibold">{loan.gracePeriodDays} Days Grace</div>
+                        <div className="text-xs opacity-50 mt-0.5">Term: {loan.durationMonths} Month(s)</div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <span className="text-xs font-bold text-amber-500 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full animate-pulse">
+                          Awaiting Driver Signature
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 3: Awaiting Admin Disbursal */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Admin Disbursal</span>
+          <span className="text-xs bg-purple-500/20 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded-full font-bold">{awaitingDisbursalLoans.length}</span>
+        </h3>
+
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver / Fleet</th>
+                  <th className="p-4 font-semibold">Accepted Offer Details</th>
+                  <th className="p-4 font-semibold">Maturity Terms</th>
+                  <th className="p-4 font-semibold text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {awaitingDisbursalLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No approved fuel credits awaiting disbursal.</td>
+                  </tr>
+                ) : (
+                  awaitingDisbursalLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-1">{getCoopName(loan.coopId)}</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.approvedAmount || loan.amount} XLM</div>
+                        <div className="text-xs opacity-50 mt-0.5 font-semibold text-purple-400">Accepted at {loan.interestRate}% Interest</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-semibold">{loan.gracePeriodDays} Days Grace</div>
+                        <div className="text-xs opacity-50 mt-0.5">Term: {loan.durationMonths} Month(s)</div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <button
+                          onClick={() => handleDisburse(loan)}
+                          disabled={disbursingId === loan.id}
+                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20" : "bg-purple-600 hover:bg-purple-700 text-white shadow-md"
+                            } ${disbursingId === loan.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                        >
+                          {disbursingId === loan.id ? "Signing & Sending..." : "Disburse Funds On-Chain"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 4: Disbursed Ledger History */}
+      <div>
+        <h3 className="text-lg font-bold mb-4">Disbursed Ledger History</h3>
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver</th>
+                  <th className="p-4 font-semibold">Active Vault Term</th>
+                  <th className="p-4 font-semibold">Interest Rate</th>
+                  <th className="p-4 font-semibold text-right">Status</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {activeLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No disbursed fuel credit history found.</td>
+                  </tr>
+                ) : (
+                  activeLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4 font-bold">{loan.driverName}</td>
+                      <td className="p-4 font-semibold">{loan.approvedAmount || loan.amount} XLM</td>
+                      <td className="p-4 font-semibold">{loan.interestRate ?? 2.5}%</td>
+                      <td className="p-4 text-right">
+                        <span className={`text-xs font-bold px-3 py-1 rounded-full ${loan.status === "repaid"
+                            ? "bg-green-500/10 text-green-500 border border-green-500/20"
+                            : "bg-blue-500/10 text-blue-500 border border-blue-500/20"
+                          }`}>
+                          {loan.status === "repaid" ? "Repaid" : "Active"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Admin Terms Selection Modal Overlay */}
+      {reviewLoan && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(8,9,14,0.75)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, padding: "1rem" }}>
+          <div className="animate-scale-up" style={{ background: dark ? "#11131E" : "#ffffff", border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(15,23,42,0.08)"}`, borderRadius: 24, width: "100%", maxWidth: 500, padding: "2.5rem" }}>
+            <h2 className="text-xl font-black mb-4">Set Custom Fuel Credit Terms</h2>
+            <p className="text-xs opacity-60 mb-6 font-semibold">Reviewing credit request submitted by <span className="font-bold text-blue-500">{reviewLoan.driverName}</span>.</p>
+
+            <form onSubmit={handleIssueOffer} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Requested Amount: {reviewLoan.amount} XLM</label>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Approved Fuel Credit Amount (XLM)</label>
+                <input
+                  type="text"
+                  value={approvedAmount}
+                  onChange={(e) => setApprovedAmount(e.target.value)}
+                  className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Interest Rate (%)</label>
+                  <input
+                    type="text"
+                    value={interestRate}
+                    onChange={(e) => setInterestRate(e.target.value)}
+                    className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Grace Period (Days)</label>
+                  <input
+                    type="text"
+                    value={gracePeriodDays}
+                    onChange={(e) => setGracePeriodDays(e.target.value)}
+                    className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-wider opacity-60 mb-2">Maturity Duration (Months)</label>
+                <input
+                  type="text"
+                  value={durationMonths}
+                  onChange={(e) => setDurationMonths(e.target.value)}
+                  className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button type="button" onClick={() => setReviewLoan(null)} className={`flex-1 font-bold py-3 rounded-xl transition-all border ${dark ? "bg-white/5 hover:bg-white/10 text-white border-white/10" : "bg-gray-50 hover:bg-gray-100 text-gray-800 border-gray-200"
+                  }`}>
+                  Cancel
+                </button>
+                <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-xl transition-all">
+                  Issue Credit Offer
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // 4. Member Directory
 const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
@@ -503,18 +940,8 @@ const VaultsTab: React.FC<{
       });
 
       onRefresh();
-    } catch (err: any) {
+    } catch (err) {
       console.error(err);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed Vault Liquidation",
-          details: `Attempted to liquidate Soroban Vault ${vault.id} belonging to Operator ${getVaultOwnerName(vault.ownerId)} but failed: ${err.message || err}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     } finally {
       setLiquidatingId(null);
     }
@@ -594,7 +1021,120 @@ const VaultsTab: React.FC<{
   );
 };
 
+// 6. Dynamic Trust Scoring
+const CreditScoresTab = () => {
+  const { dark } = useAdminTheme();
+  const [repayWeight, setRepayWeight] = useState(50);
+  const [vaultWeight, setVaultWeight] = useState(30);
+  const [volumeWeight, setVolumeWeight] = useState(20);
+  const [toast, setToast] = useState<string | null>(null);
 
+  const saveWeights = async () => {
+    if (repayWeight + vaultWeight + volumeWeight !== 100) {
+      setToast("Error: Total sum of weights must equal 100%");
+      return;
+    }
+    setToast("Updating Scoring coefficients on Firestore system config...");
+    try {
+      await setDoc(doc(db, "system", "config"), {
+        repayWeight,
+        vaultWeight,
+        volumeWeight,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      setToast("Success! Published updated algorithm weights to consensus parameters.");
+    } catch (err) {
+      setToast(`Error: ${err}`);
+    }
+  };
+
+  return (
+    <div className="space-y-8 animate-fadeIn">
+      <h1 className="text-3xl font-black">Trust Score Pricing Engine</h1>
+
+      {toast && (
+        <div className={`p-4 rounded-xl text-xs font-bold ${toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-red-500/10 text-red-400 border border-red-500/20"
+          }`}>
+          {toast}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Sliders container */}
+        <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <h3 className="font-extrabold text-lg mb-6">Algorithm Weight Adjustments</h3>
+
+          <div className="space-y-6">
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Repayment History</span>
+                <span>{repayWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={repayWeight}
+                onChange={(e) => setRepayWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Collateral Locks</span>
+                <span>{vaultWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={vaultWeight}
+                onChange={(e) => setVaultWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs font-bold uppercase tracking-wider mb-2">
+                <span>Telegraphy Sync Volume</span>
+                <span>{volumeWeight}%</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={volumeWeight}
+                onChange={(e) => setVolumeWeight(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+            </div>
+          </div>
+
+          <div className="mt-8 text-xs text-amber-500 font-bold">
+            * Note: Sum of weights must equal 100% to successfully publish to Soroban config parameters. Current sum: {repayWeight + vaultWeight + volumeWeight}%
+          </div>
+        </div>
+
+        {/* Display Card */}
+        <div className={`p-6 rounded-2xl border flex flex-col justify-between ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div>
+            <h3 className="font-extrabold text-lg mb-4">Calculated Algorithm Formula</h3>
+            <div className={`p-4 rounded-xl font-mono text-xs mb-4 ${dark ? "bg-[#0E1016]" : "bg-gray-50"}`}>
+              Score = (RepayRatio × {repayWeight}) + (CollateralRatio × {vaultWeight}) + (TelemetryVol × {volumeWeight})
+            </div>
+            <p className="text-sm opacity-70 leading-relaxed">
+              These weights run inside our Soroban scoring modules. Commuters and Drivers generate scores strictly via cryptographic ledger verification, guaranteeing credit scoring remains immune to bias.
+            </p>
+          </div>
+          <button onClick={saveWeights} className="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-3 rounded-xl transition-all">
+            Broadcast Algorithm Weights
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // 7. DeFi Reports & Revenue Tab
 const ReportsTab: React.FC<{ loans: FuelRequest[] }> = ({ loans }) => {
@@ -1374,7 +1914,7 @@ const DashboardContent: React.FC<{
         );
       case "loan-requests":
         return (
-          <AdminLoans
+          <LoanRequestsTab
             loans={loans}
             users={users}
             currentAdminEmail={currentAdminEmail}
@@ -1466,8 +2006,8 @@ const AdminDashboard = () => {
       });
       setVaults(vaultsList);
 
-      // 3. Fetch Loans
-      const loansSnap = await getDocs(query(collection(db, "fuel_requests"), where("type", "==", "loan")));
+      // 3. Fetch Loans / Fuel Requests
+      const loansSnap = await getDocs(collection(db, "fuel_requests"));
       const loansList: FuelRequest[] = [];
       loansSnap.forEach(d => {
         loansList.push({ id: d.id, ...d.data() } as FuelRequest);
@@ -1564,18 +2104,8 @@ const AdminDashboard = () => {
       });
 
       fetchSystemData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error approving user:", error);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed User Approval",
-          details: `Attempted to approve user ${targetProfile?.displayName || userId} but failed: ${error.message || error}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     }
   };
 
@@ -1595,18 +2125,8 @@ const AdminDashboard = () => {
       });
 
       fetchSystemData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error declining user:", error);
-      try {
-        await addDoc(collection(db, "admin_audit_logs"), {
-          adminEmail: currentAdminEmail,
-          action: "Failed User Decline",
-          details: `Attempted to decline user ${targetProfile?.displayName || userId} but failed: ${error.message || error}`,
-          createdAt: serverTimestamp()
-        });
-      } catch (logErr) {
-        console.error("Failed to write failure log to Firestore:", logErr);
-      }
     }
   };
 

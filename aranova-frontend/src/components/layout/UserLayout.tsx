@@ -11,6 +11,7 @@ const IconLock = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="no
 const IconList = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>);
 const IconSettings = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>);
 const IconLogout = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>);
+const IconCredit = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>);
 const IconMoon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>);
 const IconSun = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><line x1="12" y1="1" x2="12" y2="3" /><line x1="12" y1="21" x2="12" y2="23" /><line x1="4.22" y1="4.22" x2="5.64" y2="5.64" /><line x1="18.36" y1="18.36" x2="19.78" y2="19.78" /><line x1="1" y1="12" x2="3" y2="12" /><line x1="21" y1="12" x2="23" y2="12" /><line x1="4.22" y1="19.78" x2="5.64" y2="18.36" /><line x1="18.36" y1="5.64" x2="19.78" y2="4.22" /></svg>);
 const IconChevronDown = ({ open }: { open: boolean }) => (<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ transition: "transform .2s", transform: open ? "rotate(180deg)" : "rotate(0deg)" }}><polyline points="6 9 12 15 18 9" /></svg>);
@@ -20,19 +21,28 @@ const IconChevronDown = ({ open }: { open: boolean }) => (<svg width="14" height
 // ---------------------------------------------------------------------------
 type NavItem = { key: string; label: string; icon: React.ReactElement; href: string; };
 
-const MAIN_NAV: NavItem[] = [
+const NAV_OVERVIEW: NavItem[] = [
   { key: "wallet", label: "Wallet", icon: <IconGrid />, href: "/user" },
+];
+
+const NAV_ASSETS: NavItem[] = [
   { key: "vault", label: "My Vault", icon: <IconLock />, href: "/user/vault" },
+  { key: "loans", label: "Loans", icon: <IconCredit />, href: "/user/loans" },
+];
+
+const NAV_HISTORY: NavItem[] = [
   { key: "activity", label: "Activity", icon: <IconList />, href: "/user/activity" },
 ];
 
-const ACCOUNT_NAV: NavItem[] = [
+const NAV_SYSTEM: NavItem[] = [
   { key: "settings", label: "Profile & Settings", icon: <IconSettings />, href: "/user/settings" },
 ];
 
 // Combine for Mobile Bottom Nav
 const MOBILE_NAV: NavItem[] = [
-  ...MAIN_NAV,
+  ...NAV_OVERVIEW,
+  ...NAV_ASSETS,
+  ...NAV_HISTORY,
   { key: "settings", label: "Settings", icon: <IconSettings />, href: "/user/settings" },
 ];
 
@@ -58,19 +68,15 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
   const displayName = userData?.displayName || userData?.coopName || "Loading...";
   const email = userData?.email || "";
   const initials = displayName !== "Loading..." ? displayName.substring(0, 2).toUpperCase() : "...";
-  const roleDisplay = userData?.role ? userData.role.charAt(0).toUpperCase() + userData.role.slice(1) : "";
 
-  const dynamicMainNav = [...MAIN_NAV];
-  if (userData?.role === "driver") {
-    dynamicMainNav.push({ key: "loans", label: "Driver Panel", icon: <IconList />, href: "/user/loans" });
-  } else if (userData?.role === "cooperative") {
-    dynamicMainNav.push({ key: "coop-pool", label: "Coop Pool", icon: <IconList />, href: "/user/coop-pool" });
+
+  const dynamicAssetsNav = [...NAV_ASSETS];
+  if (userData?.role === "cooperative") {
+    dynamicAssetsNav.push({ key: "coop-pool", label: "Coop Pool", icon: <IconList />, href: "/user/coop-pool" });
   }
 
   const dynamicMobileNav = [...MOBILE_NAV];
-  if (userData?.role === "driver") {
-    dynamicMobileNav.splice(2, 0, { key: "loans", label: "Driver Panel", icon: <IconList />, href: "/user/loans" });
-  } else if (userData?.role === "cooperative") {
+  if (userData?.role === "cooperative") {
     dynamicMobileNav.splice(2, 0, { key: "coop-pool", label: "Coop Pool", icon: <IconList />, href: "/user/coop-pool" });
   }
 
@@ -193,8 +199,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
             height: 64, background: t.bgHeader, borderBottom: `1px solid ${t.border}`,
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "0 24px", position: "sticky", top: 0, zIndex: 100, flexShrink: 0,
-            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-            position: "relative" as const
+            backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)"
           }}
         >
           {/* Role-specific top accent stripe */}
@@ -214,9 +219,7 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
               </button>
             )}
             <a href="/user" style={{ display: "flex", alignItems: "center", gap: 10, textDecoration: "none" }}>
-              <div style={{ width: 36, height: 36, borderRadius: 12, background: t.accentLight, border: `1px solid ${t.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <img src="/logo_1.png" alt="Aranova Logo" style={{ height: 20, width: "auto", objectFit: "contain", filter: dark ? "brightness(0) invert(1)" : "none" }} />
-              </div>
+              <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 44, width: 44 }} />
               <span style={{ fontWeight: 900, fontSize: 18, letterSpacing: -0.5, color: t.textPrim }}>ARANOVA</span>
             </a>
             {/* Role badge next to logo */}
@@ -285,12 +288,21 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
           {!isMobile && (
             <aside style={{ width: sidebarW, background: t.bgSidebar, borderRight: `1px solid ${t.border}`, display: "flex", flexDirection: "column", flexShrink: 0, transition: "transform .3s cubic-bezier(0.4, 0, 0.2, 1), margin .3s cubic-bezier(0.4, 0, 0.2, 1)", transform: sidebarOpen ? "translateX(0)" : `translateX(-${sidebarW}px)`, marginLeft: sidebarOpen ? 0 : -sidebarW, position: "sticky", top: 64, height: "calc(100vh - 64px)", padding: 10 }}>
               <div style={{ padding: "14px 12px 6px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Main Menu</div>
-                {dynamicMainNav.map((item) => <NavLink key={item.key} item={item} />)}
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Overview</div>
+                {NAV_OVERVIEW.map((item) => <NavLink key={item.key} item={item} />)}
+              </div>
+              
+              <div style={{ padding: "12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Liquidity & Assets</div>
+                {dynamicAssetsNav.map((item) => <NavLink key={item.key} item={item} />)}
               </div>
               <div style={{ padding: "12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
-                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>Account</div>
-                {ACCOUNT_NAV.map((item) => <NavLink key={item.key} item={item} />)}
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>History</div>
+                {NAV_HISTORY.map((item) => <NavLink key={item.key} item={item} />)}
+              </div>
+              <div style={{ padding: "12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 10, fontWeight: 850, letterSpacing: "1.5px", color: t.textFaint, textTransform: "uppercase", padding: "0 14px", marginBottom: 6 }}>System</div>
+                {NAV_SYSTEM.map((item) => <NavLink key={item.key} item={item} />)}
               </div>
               <div style={{ marginTop: "auto", padding: 12, borderTop: `1px solid ${t.border}` }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px", borderRadius: 16, background: t.accentLight, border: `1px solid ${t.border}` }}>

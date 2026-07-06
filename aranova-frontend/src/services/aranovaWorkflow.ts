@@ -1,7 +1,7 @@
 import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, increment } from "firebase/firestore";
 import { db } from "../firebase/config";
 
-export const ADMIN_PUBLIC_KEY = "GADMINAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+export const ADMIN_PUBLIC_KEY = "GADMINPABORANOVAPLACEHOLDERRRRRRRRRRRRRRRRRRRRRRRRRRRRA";
 export const dayMs = 24 * 60 * 60 * 1000;
 
 export type UserRole = "commuter" | "driver" | "cooperative";
@@ -88,26 +88,101 @@ export const ensureUserProfile = async (user: any) => {
     return { uid: user.uid, ...snap.data() };
 };
 
+export const recalculateAndSyncTrustScore = async (userId: string) => {
+    try {
+        const userRef = doc(db, "users", userId);
+        const userSnap = await getDoc(userRef);
+        if (!userSnap.exists()) return 0;
+        
+        let score = 0; // Starting baseline
+        const now = Date.now();
+
+        // 1. Vault locks (+1 point for every 5 XLM locked)
+        const vaultSnap = await getDocs(query(collection(db, "vaults"), where("ownerId", "==", userId)));
+        vaultSnap.forEach((docSnap) => {
+            const v = docSnap.data();
+            const lockedAmount = Number(v.lockedAmount || 0);
+            if (v.status === "locked") {
+                score += Math.floor(lockedAmount / 5);
+            } else if (v.status === "redeemed") {
+                score += 10; // Lifecycle completed reward
+            }
+        });
+
+        // 2. Admin Loan repayments and daily bonuses (type:"loan" only — never mix with fuel_credit)
+        const loanSnap = await getDocs(query(collection(db, "fuel_requests"), where("driverId", "==", userId), where("type", "==", "loan")));
+        const repaidDates: Set<string> = new Set();
+        
+        loanSnap.forEach((docSnap) => {
+            const loan = docSnap.data();
+            if (loan.status === "repaid") {
+                score += 5; // Standard repayment points
+                
+                // Add daily bonus tracking
+                const repaidAtDate = parseTimestamp(loan.repaidAt || loan.createdAt);
+                if (repaidAtDate) {
+                    const dateKey = repaidAtDate.toISOString().split("T")[0]; // YYYY-MM-DD
+                    repaidDates.add(dateKey);
+                }
+            }
+        });
+
+        // Add +2 points for every unique day a loan was settled
+        score += repaidDates.size * 2;
+
+        // 3. Penalize active loans that are past their due date
+        loanSnap.forEach((docSnap) => {
+            const loan = docSnap.data();
+            if (loan.status === "active") {
+                const approvedAt = parseTimestamp(loan.approvedAt || loan.createdAt);
+                if (approvedAt) {
+                    const durationDays = Number(loan.durationDays || 30);
+                    const dueDate = approvedAt.getTime() + durationDays * 24 * 60 * 60 * 1000;
+                    
+                    if (now > dueDate) {
+                        const msOverdue = now - dueDate;
+                        const daysOverdue = Math.floor(msOverdue / (24 * 60 * 60 * 1000));
+                        
+                        // Penalty: -20 base points + (-5 points for each full day overdue)
+                        score -= (20 + daysOverdue * 5);
+                    }
+                }
+            }
+        });
+
+        // Lower limit is 0
+        const finalScore = Math.max(0, score);
+        
+        await updateDoc(userRef, {
+            trustScore: finalScore,
+            lastTrustUpdate: serverTimestamp()
+        });
+
+        return finalScore;
+    } catch (error) {
+        console.error("Error recalculating trust score:", error);
+        return 0;
+    }
+};
+
 export const maybeRunDailyTrustUpdate = async (userData: any) => {
     const lastUpdate = parseTimestamp(userData.lastTrustUpdate);
     if (lastUpdate && Date.now() - lastUpdate.getTime() < dayMs) return;
 
-    let nextScore = Number(userData.trustScore || 0);
     const now = Date.now();
 
-    const loanSnap = await getDocsSafe(query(collection(db, "fuel_requests"), where("driverId", "==", userData.uid)));
+    // Admin Loans only — fuel_credit has its own overdue logic managed by the cooperative
+    const loanSnap = await getDocsSafe(query(collection(db, "fuel_requests"), where("driverId", "==", userData.uid), where("type", "==", "loan")));
     const activeOverdueLoans = loanSnap.filter((item) => {
         const record = item as Record<string, any>;
-        const createdAt = parseTimestamp(record.createdAt);
+        const approvedAt = parseTimestamp(record.approvedAt || record.createdAt);
         const durationDays = Number(record.durationDays || defaultPolicy.durationValue);
-        return record.status === "active" && createdAt && now - createdAt.getTime() > durationDays * dayMs;
+        return record.status === "active" && approvedAt && now - approvedAt.getTime() > durationDays * dayMs;
     });
 
     const overdue = activeOverdueLoans.length > 0;
 
     if (overdue) {
-        nextScore -= 4;
-
         // Auto vault redirection rule for overdue loans
         for (const loan of activeOverdueLoans) {
             const loanRef = doc(db, "fuel_requests", loan.id);
@@ -170,19 +245,8 @@ export const maybeRunDailyTrustUpdate = async (userData: any) => {
         }
     }
 
-    const vaultSnap = await getDocsSafe(query(collection(db, "vaults"), where("ownerId", "==", userData.uid)));
-    const matured = vaultSnap.some((item) => {
-        const record = item as Record<string, any>;
-        const maturityDate = parseTimestamp(record.maturityDate);
-        return record.status === "locked" && maturityDate && now >= maturityDate.getTime();
-    });
-
-    if (matured) nextScore += 2;
-
-    await updateDoc(doc(db, "users", userData.uid), {
-        trustScore: Math.max(0, Math.min(100, nextScore)),
-        lastTrustUpdate: serverTimestamp(),
-    });
+    // Dynamic dynamic recalculate after updates
+    await recalculateAndSyncTrustScore(userData.uid);
 };
 
 export const queueBluetoothPayment = (userId: string, payload: any) => {

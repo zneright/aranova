@@ -2,31 +2,16 @@ import React, {
   useState,
   useEffect,
   useRef,
-  createContext,
-  useContext,
 } from "react";
+import { useNavigate } from "react-router-dom";
+import { signOut } from "firebase/auth";
+import { auth, db } from "../../firebase/config";
+import { collection, query, where, onSnapshot, limit } from "firebase/firestore";
+import AnnouncementBell from "../ui/AnnouncementBell";
 
-// ─── Theme Context ────────────────────────────────────────────────────────────
-interface AdminThemeCtx {
-  dark: boolean;
-  toggleDark: () => void;
-}
-export const AdminThemeContext = createContext<AdminThemeCtx>({
-  dark: false,
-  toggleDark: () => {},
-});
-export const useAdminTheme = () => useContext(AdminThemeContext);
+import { AdminThemeContext, useAdminTheme, AdminPageContext, useAdminPage } from "../../contexts/AdminContext";
 
-// ─── Active Page Context ──────────────────────────────────────────────────────
-interface AdminPageCtx {
-  activePage: string;
-  setActivePage: (p: string) => void;
-}
-export const AdminPageContext = createContext<AdminPageCtx>({
-  activePage: "dashboard",
-  setActivePage: () => {},
-});
-export const useAdminPage = () => useContext(AdminPageContext);
+export { useAdminTheme, useAdminPage };
 
 // ─── SVG Icons ────────────────────────────────────────────────────────────────
 const Ico = ({
@@ -55,17 +40,16 @@ const Ico = ({
 const IcoDashboard = ({ c }: { c: string }) => <Ico color={c} d={<><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>} />;
 const IcoPool = ({ c }: { c: string }) => <Ico color={c} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />;
 const IcoLoans = ({ c }: { c: string }) => <Ico color={c} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />;
-const IcoLogs = ({ c }: { c: string }) => <Ico color={c} d="M13 10V3L4 14h7v7l9-11h-7z" />;
+
 const IcoMembers = ({ c }: { c: string }) => <Ico color={c} d={<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>} />;
 const IcoVaults = ({ c }: { c: string }) => <Ico color={c} d={<><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>} />;
-const IcoCredit = ({ c }: { c: string }) => <Ico color={c} d={<><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></>} />;
-const IcoTransactions = ({ c }: { c: string }) => <Ico color={c} d={<><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></>} />;
+
 const IcoReports = ({ c }: { c: string }) => <Ico color={c} d={<><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></>} />;
 const IcoDisputes = ({ c }: { c: string }) => <Ico color={c} d={<><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>} />;
 const IcoNode = ({ c }: { c: string }) => <Ico color={c} d={<><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>} />;
 const IcoSettings = ({ c }: { c: string }) => <Ico color={c} d={<><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></>} />;
 const IcoAudit = ({ c }: { c: string }) => <Ico color={c} d={<><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></>} />;
-const IcoBell = ({ c }: { c: string }) => <Ico color={c} d={<><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></>} />;
+
 const IcoChevron = ({ open, c }: { open: boolean; c: string }) => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform .2s" }}><polyline points="6 9 12 15 18 9" /></svg>;
 const IcoMenu = ({ c }: { c: string }) => <Ico color={c} d={<><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></>} />;
 const IcoX = ({ c }: { c: string }) => <Ico color={c} d={<><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></>} />;
@@ -88,27 +72,36 @@ interface NavGroup {
 
 const NAV_GROUPS: NavGroup[] = [
   {
-    section: "Core",
+    section: "Overview",
     items: [
       { key: "dashboard",    label: "Dashboard",        icon: (c) => <IcoDashboard c={c} /> },
-      { key: "coop-pool",    label: "Coop Pool",        icon: (c) => <IcoPool c={c} /> },
-      { key: "loan-requests",label: "Loan Requests",    icon: (c) => <IcoLoans c={c} />, badge: 3 },
     ],
   },
   {
-    section: "Members",
+    section: "Loan Management",
     items: [
-      { key: "members",      label: "Members",          icon: (c) => <IcoMembers c={c} /> },
-      { key: "vaults",       label: "Vaults",           icon: (c) => <IcoVaults c={c} /> },
-      { key: "credit-scores",label: "Credit Scores",    icon: (c) => <IcoCredit c={c} /> },
+      { key: "loan-requests",label: "Microloans",       icon: (c) => <IcoLoans c={c} />, badge: 3 },
     ],
   },
   {
-    section: "Finance",
+    section: "Liquidity & Vaults",
     items: [
-      { key: "transactions", label: "Transactions",     icon: (c) => <IcoTransactions c={c} /> },
-      { key: "telegraphy",   label: "Telegraphy Logs",  icon: (c) => <IcoLogs c={c} />, badge: 8 },
-      { key: "reports",      label: "Reports",          icon: (c) => <IcoReports c={c} /> },
+      { key: "coop-pool",    label: "Coop Pools",       icon: (c) => <IcoPool c={c} /> },
+      { key: "vaults",       label: "Driver Vaults",    icon: (c) => <IcoVaults c={c} /> },
+    ],
+  },
+  {
+    section: "Users & Access",
+    items: [
+      { key: "members",      label: "Directory",        icon: (c) => <IcoMembers c={c} /> },
+      { key: "admin-mgmt",   label: "Access Control",   icon: (c) => <IcoMembers c={c} /> },
+    ],
+  },
+  {
+    section: "Risk & Compliance",
+    items: [
+      { key: "audit",        label: "Audit Trail",      icon: (c) => <IcoAudit c={c} /> },
+      { key: "reports",      label: "Risk Reports",     icon: (c) => <IcoReports c={c} /> },
       { key: "disputes",     label: "Disputes",         icon: (c) => <IcoDisputes c={c} />, badge: 1 },
     ],
   },
@@ -116,7 +109,6 @@ const NAV_GROUPS: NavGroup[] = [
     section: "System",
     items: [
       { key: "node",         label: "Node Status",      icon: (c) => <IcoNode c={c} /> },
-      { key: "audit",        label: "Audit Trail",      icon: (c) => <IcoAudit c={c} /> },
       { key: "settings",     label: "Settings",         icon: (c) => <IcoSettings c={c} /> },
     ],
   },
@@ -134,11 +126,40 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
   activePage = "dashboard",
   onPageChange,
 }) => {
+  const navigate = useNavigate();
+  const adminUserData = {
+    uid: "admin",
+    displayName: "System Administrator",
+    role: "admin",
+    email: "admin@aranova.ph"
+  };
   const [dark, setDark] = useState(true); // admin defaults dark
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      navigate("/auth");
+    } catch (err) {
+      console.warn("Admin sign out error:", err);
+    }
+  };
+
+  const [adminKey, setAdminKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const q = query(collection(db, "users"), where("role", "==", "admin"), limit(1));
+    const unsub = onSnapshot(q, (snap) => {
+      if (!snap.empty) {
+        const u = snap.docs[0].data();
+        if (u.publicKey) setAdminKey(u.publicKey);
+        else setAdminKey(null);
+      }
+    });
+    return unsub;
+  }, []);
 
   // Sync dark mode to the global document object so Tailwind dark classes work
   useEffect(() => {
@@ -273,9 +294,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
             <div style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px 0 20px", borderBottom: `1px solid ${tk.sbBorder}`, flexShrink: 0, transition: "border .2s" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {/* Replaced Icon with logo_1.png */}
-                <div style={{ width: 32, height: 32, borderRadius: 8, background: dark ? "rgba(59,130,246,0.15)" : "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <img src="/logo_1.png" alt="Aranova Logo" style={{ height: 20, width: "auto", objectFit: "contain", filter: dark ? "brightness(0) invert(1)" : "none" }} />
-                </div>
+                <img src="/logo_svg.svg" alt="Aranova Logo" style={{ height: 44, width: 44 }} />
                 <span style={{ color: tk.text, fontWeight: 900, fontSize: 16, letterSpacing: "-0.3px", transition: "color .2s" }}>ARANOVA</span>
                 <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: "1.5px", color: "#3B82F6", background: dark ? "rgba(59,130,246,0.15)" : "#EFF6FF", padding: "2px 6px", borderRadius: 4, textTransform: "uppercase" }}>ADMIN</span>
               </div>
@@ -309,12 +328,15 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: tk.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", transition: "color .2s" }}>Admin User</div>
                   <div style={{ fontSize: 11, color: tk.sbText, transition: "color .2s" }}>admin@aranova.ph</div>
+                  <div style={{ fontSize: 9, fontFamily: "monospace", color: adminKey ? "#10B981" : "#F87171", transition: "color .2s", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {adminKey ? `${adminKey.substring(0, 6)}...${adminKey.substring(adminKey.length - 4)}` : "No Wallet"}
+                  </div>
                 </div>
-                <a href="/" title="Sign out" style={{ color: tk.sbText, display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, textDecoration: "none", transition: "color .15s, background .15s" }}
+                <button onClick={handleSignOut} title="Sign out" style={{ border: "none", background: "none", cursor: "pointer", color: tk.sbText, display: "flex", alignItems: "center", justifyContent: "center", padding: 6, borderRadius: 8, transition: "color .15s, background .15s" }}
                   onMouseEnter={(e) => { e.currentTarget.style.color = "#F87171"; e.currentTarget.style.background = "rgba(248,113,113,0.1)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.color = tk.sbText; e.currentTarget.style.background = "transparent"; }}>
                   <IcoLogout c="currentColor" />
-                </a>
+                </button>
               </div>
             </div>
           </aside>
@@ -359,12 +381,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                 </button>
 
                 {/* Bell */}
-                <button
-                  style={{ background: dark ? "rgba(255,255,255,0.06)" : "#F1F5F9", border: `1px solid ${tk.sbBorder}`, borderRadius: 8, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", position: "relative", transition: "background .2s, border .2s" }}
-                >
-                  <IcoBell c={tk.sbText} />
-                  <span style={{ position: "absolute", top: 6, right: 6, width: 8, height: 8, background: "#F87171", borderRadius: "50%", border: "2px solid " + tk.headerBg, transition: "border .2s" }} />
-                </button>
+                <AnnouncementBell userData={adminUserData} />
 
                 {/* Profile dropdown */}
                 <div ref={profileRef} style={{ position: "relative" }}>
@@ -382,6 +399,11 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                       <div style={{ padding: "12px 14px", borderBottom: `1px solid ${tk.cardBdr}` }}>
                         <div style={{ fontWeight: 700, fontSize: 13, color: tk.text }}>Admin User</div>
                         <div style={{ fontSize: 11, color: tk.textMid, marginTop: 2 }}>admin@aranova.ph</div>
+                        {adminKey && (
+                          <div style={{ fontSize: 9, fontFamily: "monospace", color: "#10B981", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={adminKey}>
+                            {adminKey}
+                          </div>
+                        )}
                       </div>
                       {[
                         { icon: (c: string) => <IcoUser c={c} />, label: "Profile" },
@@ -398,6 +420,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                       ))}
                       <div style={{ borderTop: `1px solid ${tk.cardBdr}` }}>
                         <button
+                          onClick={handleSignOut}
                           style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", color: "#F87171", fontSize: 13, border: "none", background: "none", width: "100%", textAlign: "left", cursor: "pointer" }}
                           onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(248,113,113,0.1)")}
                           onMouseLeave={(e) => (e.currentTarget.style.background = "none")}

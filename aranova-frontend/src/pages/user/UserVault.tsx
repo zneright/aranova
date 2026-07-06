@@ -16,7 +16,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
-import { scoreDeltaForVault, dayMs, formatXlm } from "../../services/aranovaWorkflow";
+import { scoreDeltaForVault, dayMs, formatXlm, recalculateAndSyncTrustScore } from "../../services/aranovaWorkflow";
 import CryptoJS from "crypto-js";
 import { Keypair } from "@stellar/stellar-sdk";
 import { lockVaultOnChain, redeemVaultOnChain, getVaultBalanceOnChain } from "../../services/sorobanService";
@@ -280,9 +280,9 @@ const UserVault = () => {
         await updateDoc(doc(db, "users", userData.uid), {
           walletBalance: increment(-calculatedLockAmount),
           vaultBalance: increment(calculatedLockAmount),
-          trustScore: Math.min(100, Number(userData.trustScore || 0) + scoreDeltaForVault(calculatedLockAmount, daysVal)),
           lastTrustUpdate: serverTimestamp(),
         });
+        await recalculateAndSyncTrustScore(userData.uid);
 
         await addDoc(collection(db, "transactions"), {
           type: "vault_lock",
@@ -338,9 +338,9 @@ const UserVault = () => {
         await updateDoc(doc(db, "users", userData.uid), {
           walletBalance: increment(redeemAmount),
           vaultBalance: increment(-redeemAmount),
-          trustScore: Math.min(100, Number(userData.trustScore || 0) + 2),
           lastTrustUpdate: serverTimestamp(),
         });
+        await recalculateAndSyncTrustScore(userData.uid);
 
         await addDoc(collection(db, "transactions"), {
           type: "vault_redeem",
@@ -932,15 +932,15 @@ const UserVault = () => {
       <div className="space-y-4">
         <div>
           <div className="flex justify-between text-[10px] font-black mb-1.5">
-            <span className="text-gray-400 uppercase tracking-wide">Lock Health multiplier</span>
+            <span className="text-gray-400 uppercase tracking-wide">Trust Rating (Infinite)</span>
             <span className={role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#8A7D00] dark:text-[#FFE600]'}>
-              {userData.trustScore}/105
+              {userData.trustScore} XP (Lvl {Math.floor(userData.trustScore / 100) + 1})
             </span>
           </div>
           <div className={`w-full rounded-full h-2 ${dark ? 'bg-white/5' : 'bg-gray-200'}`}>
             <div className={`h-2 rounded-full ${
               role === 'driver' ? 'bg-[#FF6B00]' : role === 'cooperative' ? 'bg-[#10B981]' : 'bg-[#FFE600]'
-            }`} style={{ width: `${userData.trustScore}%` }}></div>
+            }`} style={{ width: `${userData.trustScore % 100}%` }}></div>
           </div>
         </div>
         <p className="text-xs text-gray-500 leading-relaxed font-medium">

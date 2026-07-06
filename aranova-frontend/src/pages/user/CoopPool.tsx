@@ -10,7 +10,7 @@ import {
 import { db } from "../../firebase/config";
 import {
   formatXlm, defaultPolicy, type Policy,
-  parseTimestamp, dayMs,
+  parseTimestamp, dayMs, recalculateAndSyncTrustScore,
 } from "../../services/aranovaWorkflow";
 import {
   depositPool, releaseCredit, getPoolBalance,
@@ -45,9 +45,10 @@ const getSigningHandler = async (userData: any, networkPassphrase: string) => {
 // ── Trust Score Bar ──────────────────────────────────────────────────────────
 const TrustBar = ({ score }: { score: number }) => {
   const color = score >= 80 ? "#10B981" : score <= 30 ? "#EF4444" : "#F59E0B";
+  const percent = score > 0 && score % 100 === 0 ? 100 : score % 100;
   return (
     <div className="h-1 w-full rounded-full bg-white/5 overflow-hidden mt-2">
-      <div style={{ width: `${Math.min(100, score)}%`, background: color, height: "100%", borderRadius: 99, transition: "width 0.7s cubic-bezier(0.16,1,0.3,1)" }} />
+      <div style={{ width: `${percent}%`, background: color, height: "100%", borderRadius: 99, transition: "width 0.7s cubic-bezier(0.16,1,0.3,1)" }} />
     </div>
   );
 };
@@ -99,8 +100,9 @@ const CoopPool = () => {
     if (userData?.publicKey) {
       getPoolBalance(userData.publicKey).then((b) => { if (b !== -1n) setStats((p: any) => ({ ...p, poolBalance: Number(b) / 1e7 })); }).catch(console.warn);
     }
-    const u2 = onSnapshot(query(collection(db, "fuel_requests"), where("coopId", "==", userData.uid)), (s) => setRequests(s.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
-    const u3 = onSnapshot(doc(db, "app_config", "policy"), (s) => { if (s.exists()) setPolicy({ ...defaultPolicy, ...s.data() as any }); }, console.warn);
+    const u2 = onSnapshot(query(collection(db, "fuel_requests"), where("coopId", "==", userData.uid), where("type", "==", "fuel_credit")), (s) => setRequests(s.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
+    // Fuel Credit policy is SEPARATE from Admin Loan policy — use its own config doc
+    const u3 = onSnapshot(doc(db, "app_config", "fuel_credit_policy"), (s) => { if (s.exists()) setPolicy({ ...defaultPolicy, ...s.data() as any }); }, console.warn);
     const u4 = onSnapshot(query(collection(db, "users"), where("role", "==", "driver"), where("cooperativeId", "==", userData.uid)), (s) => setCoopDrivers(s.docs.map((d) => ({ id: d.id, ...d.data() }))), console.warn);
     return () => { u1(); u2(); u3(); u4(); };
   }, [authLoading, userData?.uid, userData?.publicKey]);
@@ -127,18 +129,44 @@ const CoopPool = () => {
     try {
       const amt = Number(req.approvedAmount || req.amount);
       const h = await getSigningHandler(userData, NETWORK_PASSPHRASE);
-      const tx = await releaseCredit(userData.publicKey, req.driverPublicKey, BigInt(Math.floor(amt * 1e7)), BigInt(Number(req.interestRate || 3) * 100), Number(req.durationDays || 30), h);
+      const tx = await releaseCredit(userData.publicKey, req.driverPublicKey, BigInt(Math.floor(amt * 1e7)), BigInt(Number(req.interestRate || 3) * 100), 1, h);
       await updateDoc(doc(db, "fuel_requests", req.id), { status: "active", approvedAt: serverTimestamp(), blockchainTxHash: tx });
+      await recalculateAndSyncTrustScore(req.driverId);
       await setDoc(doc(db, "coop_stats", userData.uid), { poolBalance: increment(-amt), totalReleased: increment(amt), outstanding: increment(amt) }, { merge: true });
-      await addDoc(collection(db, "transactions"), { type: "credit_release", from: userData.uid, to: req.driverId, amount: amt, status: "completed", blockchainTxHash: tx, createdAt: serverTimestamp() });
+      // Log as type:"fuel_credit" so drivers can see this in UserFuelCredit transaction history
+      await addDoc(collection(db, "transactions"), { type: "fuel_credit", from: userData.uid, to: req.driverId, driverPublicKey: req.driverPublicKey, coopId: userData.uid, amount: amt, status: "completed", blockchainTxHash: tx, createdAt: serverTimestamp() });
       alert(`Credit released!\nTx: ${tx}`);
     } catch (e: any) { alert(e.message || e); }
     finally { setBusy(false); }
   };
 
   const savePolicy = async () => {
-    await setDoc(doc(db, "app_config", "policy"), policy, { merge: true });
-    alert("Policy saved.");
+    // Fuel Credit policy saves to its OWN config doc — never overwrites Admin Loan policy
+    await setDoc(doc(db, "app_config", "fuel_credit_policy"), policy, { merge: true });
+    alert("Fuel Credit policy saved.");
+  };
+
+  // Coop allocates fuel credit to a specific driver (creates the fuel_credit document)
+  const handleAllocate = async (driver: any, amount: number) => {
+    if (!amount || amount <= 0) return alert("Enter a valid allocation amount.");
+    if (amount > Number(stats.poolBalance || 0)) return alert("Insufficient pool balance.");
+    setBusy(true);
+    try {
+      await addDoc(collection(db, "fuel_requests"), {
+        driverId: driver.uid,
+        driverName: driver.displayName,
+        driverPublicKey: driver.publicKey,
+        coopId: userData.uid,
+        type: "fuel_credit",       // ← Cooperative credit — NOT an admin loan
+        amount,
+        approvedAmount: amount,
+        status: "pending",
+        durationDays: 1,           // Fuel credits are daily by design
+        createdAt: serverTimestamp(),
+      });
+      alert(`Fuel credit of ${amount} XLM queued for ${driver.displayName}. Approve it in the Applications tab.`);
+    } catch (e: any) { alert(e.message || e); }
+    finally { setBusy(false); }
   };
 
   const pending = requests.filter((r) => r.status === "pending");
@@ -289,7 +317,6 @@ const CoopPool = () => {
             </div>
           )}
 
-          {/* ── Tab: Driver Fleet ─────────────────────────────────────────── */}
           {activeTab === "drivers" && (
             <div className="p-6">
               {coopDrivers.length === 0 ? (
@@ -302,7 +329,6 @@ const CoopPool = () => {
                 <div className={`divide-y ${divider}`}>
                   {coopDrivers.map((d) => {
                     const score = d.trustScore || 0;
-                    const limit = Math.min(Number(policy.maxApprovedAmount || 100), score * 2);
                     const bal = driverBalances[d.uid] !== undefined
                       ? `${formatXlm(Number(driverBalances[d.uid]))} XLM`
                       : `${formatXlm(Number(d.walletBalance || 0))} XLM`;
@@ -322,15 +348,32 @@ const CoopPool = () => {
                             </div>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className={`font-black text-sm ${scoreColor}`}>{score}/100</p>
-                            <p className={`text-[10px] ${muted}`}>Limit {formatXlm(limit)} XLM</p>
+                            <p className={`font-black text-sm ${scoreColor}`}>{score} pts</p>
+                            <p className={`text-[10px] ${muted}`}>⚡ {bal}</p>
                           </div>
                         </div>
                         <TrustBar score={score} />
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${dark ? "bg-[#10B981]/10 text-[#34D399]" : "bg-emerald-50 text-emerald-700"}`}>
-                            ⚡ {bal}
-                          </span>
+                        {/* ⛽ Fuel Credit Allocation — Coop-only action, creates a fuel_credit doc */}
+                        <div className="mt-3 flex items-center gap-2">
+                          <input
+                            type="number"
+                            placeholder="XLM to allocate"
+                            min="0"
+                            className={`flex-1 px-3 py-2 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#10B981] ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-600' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'}`}
+                            id={`alloc-${d.uid}`}
+                          />
+                          <button
+                            disabled={busy}
+                            onClick={() => {
+                              const el = document.getElementById(`alloc-${d.uid}`) as HTMLInputElement;
+                              const v = Number(el?.value || 0);
+                              handleAllocate(d, v);
+                              if (el) el.value = "";
+                            }}
+                            className="shrink-0 px-3 py-2 rounded-xl font-black text-[10px] uppercase tracking-wider bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20 hover:bg-[#10B981]/20 active:scale-95 transition-all disabled:opacity-50"
+                          >
+                            ⛽ Allocate
+                          </button>
                         </div>
                       </div>
                     );
@@ -340,34 +383,22 @@ const CoopPool = () => {
             </div>
           )}
 
-          {/* ── Tab: Credit Policy ────────────────────────────────────────── */}
           {activeTab === "policy" && (
             <div className="p-6 space-y-5 max-w-sm">
               <div>
-                <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Max Borrow Limit (XLM)</p>
+                <p className={`text-[10px] font-black uppercase tracking-widest mb-0.5 text-[#10B981]`}>⛽ Fuel Credit Policy</p>
+                <p className={`text-[9px] ${muted} mb-4`}>This configures Cooperative Fuel Credit only. It has no effect on Admin Microloans.</p>
+              </div>
+              <div>
+                <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Max Daily Allocation (XLM)</p>
                 <input value={policy.maxApprovedAmount} onChange={(e) => setPolicy({ ...policy, maxApprovedAmount: Number(e.target.value) })} type="number" className={input} />
               </div>
               <div>
                 <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Interest Rate (%)</p>
                 <input value={policy.interestRate} onChange={(e) => setPolicy({ ...policy, interestRate: Number(e.target.value) })} type="number" className={input} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Term Length</p>
-                  <input value={policy.durationValue} onChange={(e) => setPolicy({ ...policy, durationValue: Number(e.target.value) })} type="number" className={input} />
-                </div>
-                <div>
-                  <p className={`text-[9px] font-black uppercase tracking-widest mb-1.5 ${muted}`}>Unit</p>
-                  <select value={policy.durationUnit} onChange={(e) => setPolicy({ ...policy, durationUnit: e.target.value as Policy["durationUnit"] })} className={`${input} h-[46px]`} style={{ background: dark ? "rgba(255,255,255,0.05)" : "#F9FAFB" }}>
-                    <option value="days">Days</option>
-                    <option value="weeks">Weeks</option>
-                    <option value="months">Months</option>
-                    <option value="years">Years</option>
-                  </select>
-                </div>
-              </div>
               <button onClick={savePolicy} className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider border transition-all active:scale-95 ${dark ? "border-[#10B981]/25 text-[#34D399] hover:bg-[#10B981]/5" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}>
-                Save Policy
+                Save Fuel Credit Policy
               </button>
             </div>
           )}

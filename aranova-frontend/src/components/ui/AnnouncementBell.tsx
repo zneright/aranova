@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
   collection, doc, query, where, onSnapshot,
-  addDoc, setDoc, serverTimestamp, getDocs, orderBy, limit,
+  addDoc, setDoc, serverTimestamp, getDocs, limit,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useTheme } from "../../contexts/ThemeContext";
+import { useAdminTheme } from "../layout/AdminLayout";
 
 // ── Category config ──────────────────────────────────────────────────────────
 const CATS: Record<string, { icon: string; label: string; color: string }> = {
@@ -58,7 +59,8 @@ const Lbl: React.FC<{ children: React.ReactNode; color?: string }> = ({ children
 
 // ── Main Component ────────────────────────────────────────────────────────────
 const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
-  const { dark } = useTheme();
+  const userTheme = useTheme();
+  const adminTheme = useAdminTheme();
   const [open, setOpen] = useState(false);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
@@ -79,6 +81,7 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
 
   const ref = useRef<HTMLDivElement>(null);
   const role: string = userData?.role || "commuter";
+  const dark = role === "admin" ? adminTheme.dark : userTheme.dark;
   const uid: string = userData?.uid || "";
   const canCompose = role === "admin" || role === "cooperative";
 
@@ -97,20 +100,7 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
     boxShadow: "0 32px 100px rgba(0,0,0,0.55)",
     maxHeight: "92vh", display: "flex", flexDirection: "column",
   });
-  const inp: React.CSSProperties = {
-    width: "100%", padding: "11px 14px", borderRadius: 12,
-    border: `1px solid ${bdr}`, background: dark ? "rgba(255,255,255,0.05)" : "#F3F4F6",
-    color: prim, fontSize: 13, fontWeight: 600, outline: "none",
-    boxSizing: "border-box", fontFamily: "inherit",
-  };
-  const chipBtn = (active: boolean, color: string): React.CSSProperties => ({
-    padding: "6px 11px", borderRadius: 10,
-    border: `1px solid ${active ? color : bdr}`,
-    background: active ? `${color}18` : "transparent",
-    color: active ? color : sec, fontSize: 11, fontWeight: 700,
-    cursor: "pointer", transition: "all 0.14s",
-    display: "flex", alignItems: "center", gap: 4,
-  });
+
 
   // ── Close dropdown on outside click ────────────────────────────────────────
   useEffect(() => {
@@ -500,79 +490,149 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
       {/* ── Compose Modal ───────────────────────────────────────────────────── */}
       {composing && (
         <Modal onClose={() => setComposing(false)}>
-          <div style={card(500)}>
+          <div style={card(520)}>
+            {/* Embedded styles for premium animations and states */}
+            <style>{`
+              .ann-input {
+                width: 100%;
+                padding: 12px 16px;
+                border-radius: 12px;
+                border: 1px solid ${bdr};
+                background: ${dark ? "rgba(255,255,255,0.03)" : "#F9FAFB"};
+                color: ${prim};
+                font-size: 13px;
+                font-weight: 600;
+                outline: none;
+                transition: all 0.15s ease-in-out;
+                box-sizing: border-box;
+                font-family: inherit;
+              }
+              .ann-input:focus {
+                border-color: ${roleAccent};
+                background: ${dark ? "rgba(255,255,255,0.06)" : "#ffffff"};
+                box-shadow: 0 0 0 3px ${roleAccent}15;
+              }
+              .ann-chip-btn {
+                padding: 8px 14px;
+                border-radius: 10px;
+                font-size: 11px;
+                font-weight: 700;
+                cursor: pointer;
+                transition: all 0.12s ease-in-out;
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                border: 1px solid ${bdr};
+                background: transparent;
+                color: ${sec};
+              }
+              .ann-chip-btn:hover {
+                background: ${dark ? "rgba(255,255,255,0.05)" : "#F3F4F6"};
+                color: ${prim};
+                border-color: ${dark ? "rgba(255,255,255,0.15)" : "#D1D5DB"};
+              }
+              .ann-chip-btn.active {
+                color: #ffffff;
+                background: ${roleAccent};
+                border-color: ${roleAccent};
+                box-shadow: 0 4px 12px ${roleAccent}30;
+              }
+            `}</style>
+
             {/* Accent top bar */}
-            <div style={{ height: 3, flexShrink: 0, background: `linear-gradient(90deg, ${roleAccent}, ${roleAccent}55)` }} />
+            <div style={{ height: 4, flexShrink: 0, background: `linear-gradient(90deg, ${roleAccent}, ${roleAccent}55)` }} />
 
             {/* Header */}
-            <div style={{ padding: "22px 26px 16px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", borderBottom: `1px solid ${bdr}`, flexShrink: 0 }}>
+            <div style={{ padding: "24px 28px 18px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", borderBottom: `1px solid ${bdr}`, flexShrink: 0 }}>
               <div>
-                <h2 style={{ fontSize: 17, fontWeight: 900, color: prim, margin: 0 }}>Post Announcement</h2>
-                <p style={{ fontSize: 11, color: sec, marginTop: 4, margin: "4px 0 0" }}>
+                <h2 style={{ fontSize: 18, fontWeight: 900, color: prim, margin: 0, letterSpacing: "-0.5px" }}>Post Announcement</h2>
+                <p style={{ fontSize: 11, color: sec, marginTop: 4, margin: "4px 0 0", fontWeight: 500 }}>
                   {role === "cooperative" ? "Broadcast to your drivers or specific members" : "Broadcast to Aranova users"}
                 </p>
               </div>
-              <button onClick={() => setComposing(false)} style={{ background: "none", border: "none", cursor: "pointer", color: sec, fontSize: 22, lineHeight: 1, padding: 0 }}>✕</button>
+              <button 
+                onClick={() => setComposing(false)} 
+                style={{ background: "none", border: "none", cursor: "pointer", color: sec, fontSize: 20, padding: 4, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%" }}
+                onMouseEnter={(e) => e.currentTarget.style.color = prim}
+                onMouseLeave={(e) => e.currentTarget.style.color = sec}
+              >✕</button>
             </div>
 
             {/* Scrollable form body */}
-            <div style={{ overflowY: "auto", padding: "20px 26px 24px", display: "flex", flexDirection: "column", gap: 18 }}>
+            <div style={{ overflowY: "auto", padding: "24px 28px", display: "flex", flexDirection: "column", gap: 20 }}>
 
               {/* Category */}
               <div>
-                <Lbl color={sec}>Category</Lbl>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                  {Object.entries(CATS).map(([key, cat]) => (
-                    <button key={key} onClick={() => setCatKey(key as CatKey)} style={chipBtn(catKey === key, cat.color)}>
-                      {cat.icon} {cat.label}
-                    </button>
-                  ))}
+                <Lbl color={sec}>Select Category</Lbl>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {Object.entries(CATS).map(([key, cat]) => {
+                    const isActive = catKey === key;
+                    return (
+                      <button 
+                        key={key} 
+                        type="button"
+                        onClick={() => setCatKey(key as CatKey)} 
+                        className={`ann-chip-btn ${isActive ? 'active' : ''}`}
+                        style={isActive ? { background: cat.color, borderColor: cat.color } : undefined}
+                      >
+                        {cat.icon} {cat.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
               {/* Target Audience */}
               <div>
-                <Lbl color={sec}>Send To</Lbl>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                  {adminTargets.map(([val, icon, label]) => (
-                    <button key={val} onClick={() => { setTargetMode(val); setSelectedUsers([]); setUserSearch(""); }} style={chipBtn(targetMode === val, roleAccent)}>
-                      {icon} {label}
-                    </button>
-                  ))}
+                <Lbl color={sec}>Target Audience</Lbl>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {adminTargets.map(([val, icon, label]) => {
+                    const isActive = targetMode === val;
+                    return (
+                      <button 
+                        key={val} 
+                        type="button"
+                        onClick={() => { setTargetMode(val); setSelectedUsers([]); setUserSearch(""); }} 
+                        className={`ann-chip-btn ${isActive ? 'active' : ''}`}
+                      >
+                        {icon} {label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {/* Cooperative driver-only notice */}
                 {role === "cooperative" && targetMode === "driver" && (
-                  <div style={{ marginTop: 8, padding: "9px 12px", borderRadius: 10, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", fontSize: 11, color: "#34D399", fontWeight: 700 }}>
+                  <div style={{ marginTop: 10, padding: "10px 14px", borderRadius: 12, background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.2)", fontSize: 11, color: "#34D399", fontWeight: 700 }}>
                     🛺 Visible only to your registered drivers
                   </div>
                 )}
 
                 {/* Specific user picker */}
                 {targetMode === "specific" && (
-                  <div style={{ marginTop: 12 }}>
+                  <div style={{ marginTop: 14 }}>
                     <input
                       value={userSearch}
                       onChange={(e) => setUserSearch(e.target.value)}
                       placeholder={role === "cooperative" ? "Search your drivers by name…" : "Search users by name or email…"}
-                      style={inp}
+                      className="ann-input"
                     />
 
                     {/* Selected users chips */}
                     {selectedUsers.length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
                         {selectedUsers.map((u) => (
                           <div key={u.uid} style={{
-                            display: "flex", alignItems: "center", gap: 5,
-                            padding: "5px 10px", borderRadius: 20,
-                            background: `${roleAccent}18`, border: `1px solid ${roleAccent}30`,
+                            display: "flex", alignItems: "center", gap: 6,
+                            padding: "6px 12px", borderRadius: 20,
+                            background: `${roleAccent}15`, border: `1px solid ${roleAccent}25`,
                             fontSize: 11, fontWeight: 700, color: roleAccent,
                           }}>
                             {u.role === "driver" ? "🛺" : u.role === "cooperative" ? "🏢" : "💳"}
                             {u.displayName || u.coopName || u.email || u.uid}
                             <button
                               onClick={() => toggleUser(u)}
-                              style={{ background: "none", border: "none", cursor: "pointer", color: roleAccent, fontSize: 14, lineHeight: 1, padding: 0 }}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: roleAccent, fontSize: 14, padding: 0, marginLeft: 2 }}
                             >✕</button>
                           </div>
                         ))}
@@ -582,8 +642,9 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
                     {/* Search results */}
                     {userSearch.length >= 2 && (
                       <div style={{
-                        marginTop: 6, borderRadius: 12, border: `1px solid ${bdr}`,
+                        marginTop: 8, borderRadius: 14, border: `1px solid ${bdr}`,
                         background: bg, overflow: "hidden", maxHeight: 180, overflowY: "auto",
+                        boxShadow: "0 10px 25px rgba(0,0,0,0.15)"
                       }}>
                         {userSearching ? (
                           <div style={{ padding: "16px", textAlign: "center", color: sec, fontSize: 12 }}>Searching…</div>
@@ -596,17 +657,17 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
                               key={u.uid}
                               onClick={() => toggleUser(u)}
                               style={{
-                                width: "100%", textAlign: "left", padding: "10px 14px",
+                                width: "100%", textAlign: "left", padding: "12px 16px",
                                 border: "none", borderBottom: `1px solid ${bdr}`,
                                 background: isSelected ? `${roleAccent}10` : "transparent",
                                 color: prim, cursor: "pointer", display: "flex",
-                                alignItems: "center", gap: 8, transition: "background 0.1s",
+                                alignItems: "center", gap: 10, transition: "background 0.1s",
                               }}
                               onMouseEnter={(e) => { if (!isSelected) e.currentTarget.style.background = dark ? "rgba(255,255,255,0.04)" : "#F9FAFB"; }}
                               onMouseLeave={(e) => { e.currentTarget.style.background = isSelected ? `${roleAccent}10` : "transparent"; }}
                             >
                               <div style={{
-                                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                                width: 30, height: 30, borderRadius: "50%", flexShrink: 0,
                                 background: `${roleAccent}15`, border: `1px solid ${roleAccent}25`,
                                 display: "flex", alignItems: "center", justifyContent: "center",
                                 fontSize: 12, fontWeight: 900, color: roleAccent,
@@ -634,45 +695,57 @@ const AnnouncementBell: React.FC<{ userData: any }> = ({ userData }) => {
 
               {/* Title */}
               <div>
-                <Lbl color={sec}>Title</Lbl>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short, clear title…" style={inp} />
+                <Lbl color={sec}>Announcement Title</Lbl>
+                <input 
+                  value={title} 
+                  onChange={(e) => setTitle(e.target.value)} 
+                  placeholder="Enter a clear title description…" 
+                  className="ann-input" 
+                />
               </div>
 
               {/* Message */}
               <div>
-                <Lbl color={sec}>Message</Lbl>
+                <Lbl color={sec}>Message Body</Lbl>
                 <textarea
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="Write your announcement here…"
+                  placeholder="Write your announcement content here…"
                   rows={5}
-                  style={{ ...inp, resize: "vertical", lineHeight: 1.65 }}
+                  className="ann-input"
+                  style={{ resize: "vertical", lineHeight: 1.6 }}
                 />
               </div>
 
               {/* Actions */}
-              <div style={{ display: "flex", gap: 10 }}>
+              <div style={{ display: "flex", gap: 10, paddingTop: 4 }}>
                 <button
                   onClick={handleCompose}
                   disabled={saving}
                   style={{
-                    flex: 2, padding: "13px", borderRadius: 14,
+                    flex: 2, padding: "14px", borderRadius: 14,
                     background: saving ? `${roleAccent}80` : roleAccent,
                     color: "#fff", border: "none", fontWeight: 900, fontSize: 12,
                     textTransform: "uppercase", letterSpacing: "0.08em",
                     cursor: saving ? "not-allowed" : "pointer", transition: "all 0.2s",
+                    boxShadow: `0 4px 16px ${roleAccent}20`
                   }}
+                  onMouseEnter={(e) => { if(!saving) e.currentTarget.style.filter = "brightness(1.1)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.filter = "none"; }}
                 >
                   {saving ? "Publishing…" : "📢 Publish Announcement"}
                 </button>
                 <button
                   onClick={() => setComposing(false)}
                   style={{
-                    flex: 1, padding: "13px", borderRadius: 14,
+                    flex: 1, padding: "14px", borderRadius: 14,
                     background: "transparent", color: sec,
                     border: `1px solid ${bdr}`, fontWeight: 700,
                     fontSize: 12, textTransform: "uppercase", cursor: "pointer",
+                    transition: "all 0.15s"
                   }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = dark ? "rgba(255,255,255,0.05)" : "#F3F4F6"; e.currentTarget.style.color = prim; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = sec; }}
                 >
                   Cancel
                 </button>

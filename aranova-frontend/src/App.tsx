@@ -8,8 +8,11 @@ import UserDashboard from "./pages/user/UserDashboard";
 import UserVault from "./pages/user/UserVault";
 import UserActivity from "./pages/user/UserActivity";
 import UserSettings from "./pages/user/UserSettings"; // Profile & Settings merged
-import DriverLoans from "./pages/user/DriverLoans";
 import CoopPool from "./pages/user/CoopPool";
+import UserLoans from "./pages/user/UserLoans";
+import UserFuelCredit from "./pages/user/UserFuelCredit";
+import UserSend from "./pages/user/UserSend";
+import UserReceive from "./pages/user/UserReceive";
 
 function App() {
   return (
@@ -23,8 +26,11 @@ function App() {
       {/* User Routes */}
       <Route path="/user" element={<UserDashboard />} />
       <Route path="/user/vault" element={<UserVault />} />
+      <Route path="/user/send" element={<UserSend />} />
+      <Route path="/user/receive" element={<UserReceive />} />
+      <Route path="/user/loans" element={<UserLoans />} />
+      <Route path="/user/fuel-credit" element={<UserFuelCredit />} />
       <Route path="/user/activity" element={<UserActivity />} />
-      <Route path="/user/loans" element={<DriverLoans />} />
       <Route path="/user/coop-pool" element={<CoopPool />} />
 
       {/* Both Profile and Settings point to the same merged component */}
