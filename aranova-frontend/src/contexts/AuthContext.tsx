@@ -26,6 +26,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     useEffect(() => {
         let unsubDoc: (() => void) | null = null;
         
+        // 1. Immediately restore cached auth states from LocalStorage for instant offline startup
+        const cachedUser = localStorage.getItem("aranova_auth_user");
+        const cachedProfile = localStorage.getItem("aranova_auth_profile");
+        if (cachedUser && cachedProfile) {
+            try {
+                setCurrentUser(JSON.parse(cachedUser));
+                setUserData(JSON.parse(cachedProfile));
+                setLoading(false);
+            } catch (e) {
+                console.warn("Failed to load local cached auth credentials:", e);
+            }
+        }
+
         const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
             if (unsubDoc) {
                 unsubDoc();
@@ -34,17 +47,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             if (user) {
                 setCurrentUser(user);
-                // Listen to the user's document in Firestore in real-time
-                unsubDoc = onSnapshot(doc(db, "users", user.uid), (doc) => {
-                    setUserData(doc.data() || null);
+                localStorage.setItem("aranova_auth_user", JSON.stringify({
+                    uid: user.uid,
+                    email: user.email,
+                    displayName: user.displayName
+                }));
+
+                // Listen to the user's document in Firestore (uses Firestore offline IndexedDB cache)
+                unsubDoc = onSnapshot(doc(db, "users", user.uid), (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = { uid: user.uid, ...docSnap.data() };
+                        setUserData(data);
+                        localStorage.setItem("aranova_auth_profile", JSON.stringify(data));
+                    }
                     setLoading(false);
                 }, (error) => {
                     console.error("Firestore snapshot error:", error);
+                    // Fall back to local storage profile if offline or blocked
+                    const localProfile = localStorage.getItem("aranova_auth_profile");
+                    if (localProfile) {
+                        try {
+                            setUserData(JSON.parse(localProfile));
+                        } catch (e) {}
+                    }
                     setLoading(false);
                 });
             } else {
                 setCurrentUser(null);
                 setUserData(null);
+                localStorage.removeItem("aranova_auth_user");
+                localStorage.removeItem("aranova_auth_profile");
                 setLoading(false);
             }
         });
