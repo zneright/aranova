@@ -18,7 +18,21 @@ import { formatXlm } from "../../services/aranovaWorkflow";
  * NO connection to Admin Loan system whatsoever.
  */
 const UserFuelCredit: React.FC = () => {
-  const { userData, loading: authLoading } = useAuth();
+  const { userData: contextUserData, loading: authLoading, currentUser } = useAuth();
+  const userData = (() => {
+    if (contextUserData) return contextUserData;
+    // Use per-UID namespaced cache key to prevent cross-account leakage
+    if (currentUser) {
+      const cached = localStorage.getItem(`aranova_auth_profile_${currentUser.uid}`);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (parsed && parsed.uid === currentUser.uid) return parsed;
+        } catch (e) {}
+      }
+    }
+    return null;
+  })();
   const { dark } = useTheme();
 
   // Active/pending fuel_credit allocations from the coop
@@ -30,22 +44,49 @@ const UserFuelCredit: React.FC = () => {
   const [coopStats, setCoopStats] = useState<any>(null);
   const [busy, setBusy] = useState(false);
 
-  const handleAutoAllocate = async () => {
-    if (maxDisbursable <= 0) {
-      if (coopPoolBalance <= 0) {
-        alert("The Cooperative pool is currently empty. Please ask your cooperative manager to add liquidity.");
-      } else {
-        alert("You have reached your fuel credit ceiling based on your trust score. Lock more collateral in your vault to increase your limit!");
-      }
+  // NOTE: handleAutoAllocate REMOVED — it allowed drivers to self-approve credit with no
+  // cooperative approval and no on-chain transaction. This was a critical security vulnerability.
+  // Fuel credit is now requested via handleRequestCredit and approved by a cooperative manager
+  // in the CoopPool page (which calls releaseCredit() on-chain).
+
+  const [requestAmount, setRequestAmount] = useState<string>("");
+  const [requestError, setRequestError] = useState<string>("");
+  const [requestSuccess, setRequestSuccess] = useState<string>("");
+
+  const handleRequestCredit = async () => {
+    setRequestError("");
+    setRequestSuccess("");
+
+    const coopId = userData?.cooperativeId;
+    if (!coopId) {
+      setRequestError("You are not linked to a cooperative. Contact your cooperative manager.");
       return;
     }
-    
+
+    const value = parseFloat(requestAmount);
+    if (isNaN(value) || value <= 0) {
+      setRequestError("Enter a valid amount greater than 0.");
+      return;
+    }
+    if (value > maxDisbursable) {
+      setRequestError(`Cannot exceed available allocation: ${formatXlm(maxDisbursable)} XLM`);
+      return;
+    }
+    if (value > coopPoolBalance) {
+      setRequestError("The cooperative pool does not have sufficient funds.");
+      return;
+    }
+
+    // Check for existing pending request
+    const hasPending = allocations.some(a => a.status === "pending");
+    if (hasPending) {
+      setRequestError("You already have a pending fuel credit request. Wait for your cooperative manager to approve it.");
+      return;
+    }
+
     setBusy(true);
     try {
-      const coopId = userData.cooperativeId || "unknown-coop";
-      const value = maxDisbursable;
-
-      // Auto-approved instantly!
+      // Create a PENDING request — must be approved by cooperative manager in CoopPool
       await addDoc(collection(db, "fuel_requests"), {
         driverId: userData.uid,
         driverName: userData.displayName || "Unknown Driver",
@@ -53,38 +94,16 @@ const UserFuelCredit: React.FC = () => {
         coopId: coopId,
         type: "fuel_credit",
         amount: value,
-        approvedAmount: value,
-        status: "active",
+        approvedAmount: null,
+        status: "pending",  // Must be set to 'active' by cooperative manager in CoopPool
         createdAt: serverTimestamp(),
-        disbursedAt: serverTimestamp(),
+        disbursedAt: null,
+        source: "driver_request",
       });
-      
-      // Update Coop Stats (Deduct from pool balance, add to outstanding)
-      await setDoc(doc(db, "coop_stats", coopId), {
-        poolBalance: increment(-value),
-        totalReleased: increment(value),
-        outstanding: increment(value)
-      }, { merge: true });
-
-      // Update Driver's wallet balance
-      await updateDoc(doc(db, "users", userData.uid), {
-        walletBalance: increment(value)
-      });
-      
-      // Log automatic transaction
-      await addDoc(collection(db, "transactions"), {
-        type: "fuel_credit",
-        from: coopId,
-        to: userData.uid,
-        amount: value,
-        status: "completed",
-        createdAt: serverTimestamp(),
-        blockchainTxHash: "auto-allowance-" + Date.now()
-      });
-
-      alert(`Fuel credit of ${formatXlm(value)} XLM instantly allocated from your Cooperative pool!`);
+      setRequestSuccess(`Fuel credit request for ${formatXlm(value)} XLM submitted. Your cooperative manager will review and approve it.`);
+      setRequestAmount("");
     } catch (err: any) {
-      alert("Error submitting auto-allocation: " + err.message);
+      setRequestError("Error submitting request: " + err.message);
     } finally {
       setBusy(false);
     }
@@ -156,7 +175,9 @@ const UserFuelCredit: React.FC = () => {
     .filter(a => a.status === "active")
     .reduce((sum, a) => sum + Number(a.approvedAmount || a.amount || 0), 0);
 
-  const creditLimit = Number(userData.trustScore || 0) * 2;
+  // Apply a reasonable maximum cap to prevent unlimited credit from high trust scores
+  const MAX_CREDIT_LIMIT = 500; // XLM — configurable
+  const creditLimit = Math.min(MAX_CREDIT_LIMIT, Number(userData.trustScore || 0) * 2);
   const remainingLimit = Math.max(0, creditLimit - totalActive);
 
 
@@ -227,36 +248,71 @@ const UserFuelCredit: React.FC = () => {
           </div>
         </div>
 
-        {/* Auto-Allocate Action */}
-        <div className={`p-6 rounded-[28px] border text-center ${dark ? 'border-[#10B981]/20 bg-[#10B981]/5' : 'border-emerald-200 bg-emerald-50/50'}`}>
+        {/* Request Fuel Credit — requires cooperative manager approval */}
+        <div className={`p-6 rounded-[28px] border ${dark ? 'border-[#10B981]/20 bg-[#10B981]/5' : 'border-emerald-200 bg-emerald-50/50'}`}>
           <h3 className={`text-base font-black mb-1.5 ${dark ? 'text-white' : 'text-gray-900'}`}>
-            ⚡ Instant Auto-Allocation
+            ⛽ Request Fuel Credit
           </h3>
-          <p className={`text-xs mb-6 max-w-sm mx-auto leading-relaxed ${muted}`}>
-            Get fuel credit instantly from the cooperative pool. No manual approval forms or waiting times required.
+          <p className={`text-xs mb-4 max-w-sm leading-relaxed ${muted}`}>
+            Submit a fuel credit request to your cooperative manager. Once approved on-chain, funds will be credited to your wallet.
           </p>
 
-          <button
-            onClick={handleAutoAllocate}
-            disabled={busy || maxDisbursable <= 0}
-            className={`w-full py-4 rounded-2xl text-sm font-black text-white transition-all shadow-lg uppercase tracking-wider ${
-              busy || maxDisbursable <= 0
-                ? 'bg-[#10B981]/20 text-[#10B981]/50 cursor-not-allowed shadow-none'
-                : 'bg-[#10B981] hover:bg-[#0ea5e9] shadow-[#10B981]/20 active:scale-[0.98]'
-            }`}
-          >
-            {busy ? "Allocating Credit..." : maxDisbursable <= 0 ? "Credit Ceiling Reached" : `⛽ Auto-Allocate ${formatXlm(maxDisbursable)} XLM`}
-          </button>
+          {requestError && (
+            <div className="mb-3 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-semibold">
+              {requestError}
+            </div>
+          )}
+          {requestSuccess && (
+            <div className="mb-3 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-semibold">
+              {requestSuccess}
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <input
+              type="number"
+              min="0.01"
+              max={maxDisbursable}
+              step="0.01"
+              value={requestAmount}
+              onChange={(e) => setRequestAmount(e.target.value)}
+              placeholder={`Max: ${formatXlm(maxDisbursable)} XLM`}
+              aria-label="Fuel credit request amount in XLM"
+              className={`flex-1 px-4 py-3 rounded-xl text-sm font-semibold border outline-none ${
+                dark
+                  ? 'bg-white/5 border-white/10 text-white placeholder-gray-600'
+                  : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
+              }`}
+            />
+            <button
+              onClick={handleRequestCredit}
+              disabled={busy || maxDisbursable <= 0 || !userData?.cooperativeId}
+              aria-label="Submit fuel credit request"
+              className={`px-5 py-3 rounded-xl text-sm font-black text-white transition-all ${
+                busy || maxDisbursable <= 0 || !userData?.cooperativeId
+                  ? 'bg-[#10B981]/20 text-[#10B981]/50 cursor-not-allowed'
+                  : 'bg-[#10B981] hover:bg-emerald-600 active:scale-[0.98]'
+              }`}
+            >
+              {busy ? "Sending..." : "Request"}
+            </button>
+          </div>
+
+          {!userData?.cooperativeId && (
+            <p className="mt-3 text-xs text-amber-500 font-semibold">
+              ⚠️ You are not linked to a cooperative. Ask your cooperative manager to approve your membership.
+            </p>
+          )}
         </div>
 
         {/* How it works */}
         <div className={`p-5 rounded-[24px] border ${dark ? 'border-white/5 bg-transparent' : 'border-gray-100 bg-transparent'}`}>
           <p className={`text-[10px] font-black uppercase tracking-widest text-[#10B981] mb-2`}>How Fuel Credit Works</p>
           <ul className={`text-xs leading-relaxed space-y-1 font-semibold ${muted}`}>
-            <li>• Auto-allocations deduct instantly from your cooperative's pooled liquidity</li>
-            <li>• Your credit limit scales automatically based on your Trust Score (Trust Score × 2)</li>
-            <li>• Credited funds are deposited directly to your wallet balance on Firestore</li>
-            <li>• Spend credits instantly at any cooperative-approved partner station</li>
+            <li>• Submit a fuel credit request — your cooperative manager reviews and approves it</li>
+            <li>• On approval, the cooperative releases credit on-chain via a smart contract transaction</li>
+            <li>• Your credit limit is based on your Trust Score (Trust Score × 2, max {MAX_CREDIT_LIMIT} XLM)</li>
+            <li>• Repay credit on time to maintain a high Trust Score and increase future limits</li>
           </ul>
         </div>
 

@@ -6,7 +6,20 @@ import DriverLoanSection from "../../components/ui/DriverLoanSection";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 
 const UserLoans: React.FC = () => {
-  const { userData, loading: authLoading } = useAuth();
+  const { userData: contextUserData, loading: authLoading, currentUser } = useAuth();
+  const userData = (() => {
+    if (contextUserData) return contextUserData;
+    const cached = localStorage.getItem("aranova_auth_profile");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (currentUser && parsed && parsed.uid === currentUser.uid) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return null;
+  })();
   const { dark } = useTheme();
 
   if (authLoading) {

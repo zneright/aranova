@@ -3,10 +3,136 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Allow read/write across all collections for developer testing and deployment sandbox
-    match /{document=**} {
-      allow read, write: if true;
+    // User Profiles
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (
+        request.auth.uid == userId
+          ? !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
+          : (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'email', 'displayName', 'approved', 'cooperativeId', 'coopStatus', 'createdAt', 'phone', 'plateNumber', 'vehicleType']) || (
+                exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+                  get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+                  get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cooperative'
+                )
+              )
+            )
+      );
+      allow delete: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Vaults
+    match /vaults/{vaultId} {
+      allow read: if true;
+      allow create, update: if request.auth != null && (
+        request.resource.data.ownerId == request.auth.uid || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        )
+      );
+      allow delete: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Fuel requests (Loans and Fuel Credits)
+    match /fuel_requests/{requestId} {
+      allow read: if true;
+      allow create: if request.auth != null && (
+        request.resource.data.driverId == request.auth.uid || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        )
+      );
+      allow update: if request.auth != null && (
+        resource.data.driverId == request.auth.uid || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cooperative'
+          )
+        )
+      );
+      allow delete: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Transactions
+    match /transactions/{txId} {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update, delete: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // System configurations & App Configs
+    match /system/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // App configurations
+    match /app_config/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cooperative'
+        )
+      );
+    }
+
+    // Cooperatives Stats
+    match /coop_stats/{coopId} {
+      allow read: if true;
+      allow write: if request.auth != null && (
+        request.auth.uid == coopId || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cooperative'
+          )
+        )
+      );
+    }
+
+    // Audit logs
+    match /admin_audit_logs/{logId} {
+      allow read: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+
+    // Announcements
+    match /announcements/{annId} {
+      allow read: if true;
+      allow create: if request.auth != null && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'cooperative'
+        )
+      );
+      allow update, delete: if request.auth != null && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    // Announcement Reads
+    match /announcement_reads/{readId} {
+      allow read: if true;
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if request.auth != null && (
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
     }
   }
 }
- 

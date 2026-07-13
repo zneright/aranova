@@ -28,10 +28,38 @@ const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size
 };
 
 const UserReceive: React.FC = () => {
-  const { userData, loading: authLoading } = useAuth();
+  const { userData: contextUserData, loading: authLoading, currentUser } = useAuth();
+  const userData = (() => {
+    if (contextUserData) return contextUserData;
+    const cached = localStorage.getItem("aranova_auth_profile");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (currentUser && parsed && parsed.uid === currentUser.uid) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return null;
+  })();
   const { dark } = useTheme();
   const navigate = useNavigate();
   const [scanningReceipt, setScanningReceipt] = useState(false);
+  const [receiptData, setReceiptData] = useState<any | null>(null);
+  const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
+  const handleRetryCamera = async () => {
+    setCameraError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      stream.getTracks().forEach(track => track.stop());
+      setScanningReceipt(true);
+    } catch (err: any) {
+      console.error("Camera prompt retry failed:", err);
+      setCameraError("Camera access is still blocked. Please tap the lock/settings icon in your browser address bar and enable the camera manually.");
+    }
+  };
 
   useEffect(() => {
     let scanner: Html5Qrcode | null = null;
@@ -60,7 +88,8 @@ const UserReceive: React.FC = () => {
               received.push(receipt);
               localStorage.setItem(key, JSON.stringify(received));
 
-              alert(`Offline Payment QR Scanned!\nAmount: ${receipt.amount} XLM\nPayer: ${receipt.payerName}\n\nThis will sync on-chain once you get online.`);
+              setReceiptData(receipt);
+              setShowReceiptModal(true);
               scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
             } catch (err: any) {
               console.error("QR decode failed:", err);
@@ -70,9 +99,18 @@ const UserReceive: React.FC = () => {
           },
           () => {}
         )
-        .catch((err) => {
+        .catch(async (err) => {
           console.error("Scanner start error:", err);
-          alert("Failed to access camera: " + err);
+          let friendlyMsg = "To scan commuter tickets, Aranova needs camera access. If you blocked it, tap the site settings icon in your browser address bar and toggle 'Camera' to 'Allow'.";
+          try {
+            if (navigator.permissions && navigator.permissions.query) {
+              const res = await navigator.permissions.query({ name: "camera" as any });
+              if (res.state === "denied") {
+                friendlyMsg = "Camera access is blocked by your browser settings. Please tap the lock/settings icon in your browser address bar, change 'Camera' to 'Allow', and click Retry.";
+              }
+            }
+          } catch (pErr) {}
+          setCameraError(friendlyMsg);
           setScanningReceipt(false);
         });
     }
@@ -149,13 +187,31 @@ const UserReceive: React.FC = () => {
 
           {/* Offline Receipt Collect Button (Specifically for Drivers/Receivers) */}
           <div className="mt-4 pt-4 border-t border-dashed border-gray-200 dark:border-white/10">
+            {cameraError && (
+              <div className="mb-4 p-5 rounded-2xl border border-red-500/20 bg-red-500/5 text-center animate-fadeIn">
+                <span className="text-2xl block mb-2">📸</span>
+                <h4 className="text-xs font-black text-red-500 uppercase tracking-wider">Camera Permission Blocked</h4>
+                <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+                  {cameraError}
+                </p>
+                <button
+                  onClick={handleRetryCamera}
+                  className="mt-3.5 px-5 py-2.5 bg-[#FF6B00] text-white rounded-xl font-bold text-[10px] uppercase tracking-wider hover:bg-[#E05E00] transition-all active:scale-95 shadow-sm"
+                >
+                  Grant Permission / Retry
+                </button>
+              </div>
+            )}
             {scanningReceipt && (
               <div className="mb-4 p-2 rounded-2xl border border-dashed border-gray-400">
                 <div id="reader-receive" className="w-full h-48 rounded-xl overflow-hidden" />
               </div>
             )}
             <button
-              onClick={() => setScanningReceipt(s => !s)}
+              onClick={() => {
+                setCameraError(null);
+                setScanningReceipt(s => !s);
+              }}
               className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition-all border shadow-sm active:scale-95 ${
                 scanningReceipt 
                   ? "bg-red-500/10 border-red-500/30 text-red-500" 
@@ -168,6 +224,61 @@ const UserReceive: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {showReceiptModal && receiptData && (
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6 animate-fadeIn">
+            <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
+              <div className="w-16 h-16 bg-[#10B981]/20 text-[#10B981] rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </div>
+              <h3 className="text-xl font-black">Offline Payment Scanned</h3>
+              <p className="text-xs text-gray-500 mt-2 font-medium px-2">This transit ticket receipt has been scanned and verified.</p>
+              
+              {/* Premium Ticket Receipt representation */}
+              <div className={`my-6 p-5 rounded-2xl border text-left space-y-3 relative overflow-hidden ${dark ? "bg-black/30 border-white/5" : "bg-gray-50 border-gray-100"}`}>
+                <div className="absolute top-0 right-0 transform translate-x-3 -translate-y-3 w-10 h-10 rounded-full border border-dashed opacity-10" />
+                <div className="text-[10px] font-black uppercase tracking-wider text-gray-400">Aranova Transit Ticket</div>
+                <div className="flex justify-between items-baseline border-b border-dashed pb-2 border-gray-200 dark:border-white/5">
+                  <span className="text-xs font-bold text-gray-500">Amount Received</span>
+                  <span className="text-xl font-black">{receiptData.amount} XLM</span>
+                </div>
+                <div className="space-y-1.5 pt-1 text-[10px] font-semibold text-gray-500">
+                  <div className="flex justify-between">
+                    <span>Payer (Commuter):</span>
+                    <span className="font-mono text-gray-800 dark:text-gray-200">{receiptData.payerName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Recipient (Driver):</span>
+                    <span className="font-mono text-gray-800 dark:text-gray-200">
+                      {userData.publicKey ? `${userData.publicKey.slice(0, 10)}...${userData.publicKey.slice(-10)}` : userData.uid}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Timestamp:</span>
+                    <span className="text-gray-800 dark:text-gray-200">{new Date(receiptData.timestamp).toLocaleTimeString()}</span>
+                  </div>
+                  <div className="flex justify-between pt-1.5 border-t border-dashed border-gray-200 dark:border-white/5">
+                    <span>Proof Signature:</span>
+                    <span className="font-mono text-[9px] text-[#10B981]">{receiptData.signature.slice(0, 16)}...</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/10 text-amber-500 text-[10px] font-bold rounded-xl mb-4 leading-normal">
+                ⚠️ Scanned payment saved locally. Funds will sync on-chain automatically once your device reconnects to the network.
+              </div>
+
+              <button 
+                onClick={() => { setShowReceiptModal(false); setReceiptData(null); navigate("/user"); }} 
+                className={`w-full mt-6 py-3.5 rounded-xl font-black text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 ${btnColor} ${textColor} ${btnHover}`}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </UserLayout>
   );

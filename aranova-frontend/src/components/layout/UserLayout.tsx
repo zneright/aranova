@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import AnnouncementBell from "../ui/AnnouncementBell";
 import { useTheme } from "../../contexts/ThemeContext";
+import { signOut } from "firebase/auth";
+import { auth } from "../../firebase/config";
 
 // ---------------------------------------------------------------------------
 // SVG Icon Components
@@ -63,6 +65,18 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
   const [dropdownOpen, setDropdownOpen] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const handleSignOut = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    try {
+      await signOut(auth);
+      localStorage.removeItem("aranova_auth_user");
+      // Keep local keystores and user profiles intact as requested
+      window.location.href = "/";
+    } catch (err) {
+      console.error("Sign out failed:", err);
+    }
+  };
 
   // Dynamic user fields
   const displayName = userData?.displayName || userData?.coopName || "Loading...";
@@ -271,9 +285,29 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
                     </a>
                   </div>
                   <div style={{ borderTop: `1px solid ${t.border}`, padding: 4 }}>
-                    <a href="/" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", color: "#E24B4A", textDecoration: "none", fontSize: 13, fontWeight: 700, borderRadius: 12, transition: "all 0.2s" }} className="hover:bg-red-500/10">
+                    <button 
+                      onClick={handleSignOut} 
+                      style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: 12, 
+                        padding: "10px 14px", 
+                        color: "#E24B4A", 
+                        background: "none", 
+                        border: "none", 
+                        width: "100%", 
+                        textAlign: "left", 
+                        fontFamily: "inherit", 
+                        fontSize: 13, 
+                        fontWeight: 700, 
+                        borderRadius: 12, 
+                        cursor: "pointer", 
+                        transition: "all 0.2s" 
+                      }} 
+                      className="hover:bg-red-500/10"
+                    >
                       <IconLogout /> Sign out
-                    </a>
+                    </button>
                   </div>
                 </div>
               )}

@@ -422,9 +422,31 @@ const UserSettings = () => {
             </div>
 
             {showPhrase && (
-              <div className={`p-4 rounded-xl font-mono text-xs break-all border mt-4 ${dark ? 'bg-black/30 border-white/5 text-gray-300' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
-                {decryptedPhrase}
-                <button onClick={() => setShowPhrase(false)} className={`block mt-4 font-black text-xs uppercase tracking-wider hover:underline ${dark ? 'text-red-400' : 'text-red-500'}`}>Hide Key</button>
+              <div className={`p-4 rounded-xl border mt-4 ${dark ? 'bg-black/30 border-white/5 text-gray-300' : 'bg-gray-50 border-gray-200 text-gray-700'}`}>
+                <div className="font-mono text-xs break-all select-all">{decryptedPhrase}</div>
+                <div className="flex gap-4 mt-4">
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText(decryptedPhrase);
+                      alert("Secret key copied to clipboard!");
+                    }} 
+                    className={`font-black text-xs uppercase tracking-wider hover:underline ${
+                      role === 'driver' 
+                        ? 'text-[#FF8833]' 
+                        : role === 'cooperative' 
+                          ? 'text-[#34D399]' 
+                          : 'text-[#FFE600] dark:text-[#FFE600] text-amber-600'
+                    }`}
+                  >
+                    Copy Key
+                  </button>
+                  <button 
+                    onClick={() => setShowPhrase(false)} 
+                    className={`font-black text-xs uppercase tracking-wider hover:underline ${dark ? 'text-red-400' : 'text-red-500'}`}
+                  >
+                    Hide Key
+                  </button>
+                </div>
               </div>
             )}
 

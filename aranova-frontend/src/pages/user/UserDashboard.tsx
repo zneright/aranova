@@ -103,11 +103,15 @@ const syncReceivedOfflinePayments = async (uid: string) => {
 
 const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ userData, onRefresh }) => {
     const { dark } = useTheme();
+    const { currentUser } = useAuth();
     const role = userData?.role || "commuter";
     
     const [busy, setBusy] = useState(false);
     const [offlineQueueLength, setOfflineQueueLength] = useState(0);
     const [bluetoothNotification, setBluetoothNotification] = useState<any | null>(null);
+    const [outgoingQueue, setOutgoingQueue] = useState<any[]>([]);
+    const [incomingQueue, setIncomingQueue] = useState<any[]>([]);
+    const [showQueueDetails, setShowQueueDetails] = useState(false);
 
     // Simulated Bluetooth Low Energy (BLE) Broadcast receiver channel
     useEffect(() => {
@@ -166,8 +170,6 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
 
     const availableCredit = useMemo(() => Math.max(25, Number(userData.trustScore || 0) * 2), [userData.trustScore]);
 
-
-
     const checkOfflineQueue = () => {
         const key = `aranova_offline_queue_${userData.uid}`;
         const queued = JSON.parse(localStorage.getItem(key) || "[]") as any[];
@@ -176,6 +178,8 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         const recQueued = JSON.parse(localStorage.getItem(recKey) || "[]") as any[];
 
         setOfflineQueueLength(queued.length + recQueued.length);
+        setOutgoingQueue(queued);
+        setIncomingQueue(recQueued);
     };
 
     useEffect(() => {
@@ -221,6 +225,7 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
     }, [userData.publicKey, onRefresh]);
 
     useEffect(() => {
+        if (!currentUser) return; // Skip Firestore transactions listener in sandbox mode
         if (!userData.uid) return;
 
         const destinations = [userData.uid];
@@ -319,9 +324,13 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
             unsub();
             closeHorizonStream();
         };
-    }, [userData.uid, userData.publicKey, userData.email, onRefresh]);
+    }, [userData.uid, userData.publicKey, userData.email, onRefresh, currentUser]);
 
     const handleSyncQueue = async () => {
+        if (!currentUser) {
+            alert("⚠️ Offline syncing is disabled in Sandbox/Local Mode. Sign in with a real account to sync.");
+            return;
+        }
         setBusy(true);
         try {
             await syncBluetoothQueue(userData.uid);
@@ -355,6 +364,11 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
                 role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
               }`}>{role === 'driver' ? 'Driver Wallet' : role === 'cooperative' ? 'Cooperative Treasury' : 'Commuter Pass'}</div>
               <div className={`text-sm font-bold ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{userData?.displayName || userData?.coopName}</div>
+              {userData?.publicKey && (
+                <div className="text-[9px] font-mono text-gray-400 mt-0.5 select-all break-all max-w-[200px]" title="Stellar Public Key">
+                  {userData.publicKey}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -453,26 +467,86 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
     return (
         <div className="space-y-6">
             {offlineQueueLength > 0 && (
-                <div className={`border rounded-[28px] p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 transition-all duration-300 ${dark ? 'bg-blue-950/20 border-blue-900/30' : 'bg-blue-50 border-blue-100'}`}>
-                    <div>
-                        <span className={`text-sm font-extrabold tracking-wide uppercase flex items-center gap-2 ${dark ? 'text-blue-400' : 'text-blue-800'}`}>
-                          📡 Offline Transactions Queued
-                        </span>
-                        <div className={`text-xs mt-1 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>You have {offlineQueueLength} payments waiting to sync.</div>
+                <div className={`border rounded-[28px] p-6 space-y-4 transition-all duration-300 ${dark ? 'bg-[#101424] border-white/10' : 'bg-white border-gray-150 shadow-sm'}`}>
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <span className={`text-sm font-extrabold tracking-wide uppercase flex items-center gap-2 ${dark ? 'text-blue-400' : 'text-blue-800'}`}>
+                              📡 Offline Transactions Queued
+                            </span>
+                            <div className={`text-xs mt-1 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+                              {offlineQueueLength} payment{offlineQueueLength > 1 ? 's' : ''} queued locally.
+                            </div>
+                        </div>
+                        <div className="flex gap-2 w-full sm:w-auto">
+                            <button
+                              onClick={() => setShowQueueDetails(!showQueueDetails)}
+                              className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider border transition-all ${
+                                dark ? "border-white/10 text-gray-300 hover:bg-white/5" : "border-gray-200 text-gray-600 hover:bg-gray-50"
+                              }`}
+                            >
+                              {showQueueDetails ? "Hide Details" : "View Receipts"}
+                            </button>
+                            <button
+                              onClick={handleSyncQueue}
+                              disabled={busy || !navigator.onLine}
+                              className={`flex-1 sm:flex-none px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider disabled:opacity-50 transition-all ${
+                                role === 'driver'
+                                  ? 'bg-[#FF6B00] text-white hover:bg-[#E05E00]'
+                                  : role === 'cooperative'
+                                    ? 'bg-[#10B981] text-white hover:bg-[#0E9F6E]'
+                                    : 'bg-black text-[#FFE600] hover:opacity-90'
+                              }`}
+                            >
+                              Sync Queue
+                            </button>
+                        </div>
                     </div>
-                    <button
-                      onClick={handleSyncQueue}
-                      disabled={busy || !navigator.onLine}
-                      className={`px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider disabled:opacity-50 transition-all ${
-                        role === 'driver'
-                          ? 'bg-[#FF6B00] text-white hover:bg-[#E05E00]'
-                          : role === 'cooperative'
-                            ? 'bg-[#10B981] text-white hover:bg-[#0E9F6E]'
-                            : 'bg-black text-[#FFE600] hover:opacity-90'
-                      }`}
-                    >
-                      Sync Queue
-                    </button>
+
+                    {showQueueDetails && (
+                        <div className="space-y-3 pt-3 border-t border-dashed border-gray-200 dark:border-white/10 animate-fadeIn">
+                            {/* Incoming Receipts (Scanned Offline Payments) */}
+                            {incomingQueue.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-[10px] font-black uppercase tracking-wider text-green-500">📥 Received Offline (Pending Sync)</div>
+                                    <div className="grid gap-2">
+                                        {incomingQueue.map((item, idx) => (
+                                            <div key={idx} className={`p-3 rounded-xl border flex justify-between items-center ${dark ? 'bg-black/30 border-white/5' : 'bg-gray-50 border-gray-150'}`}>
+                                                <div className="text-left">
+                                                    <div className="text-xs font-bold text-gray-800 dark:text-gray-200">From: {item.payerName || "Commuter"}</div>
+                                                    <div className="text-[9px] text-gray-400 font-mono mt-0.5">Sig: {item.signature?.slice(0, 12)}...</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xs font-black text-green-500">+{item.amount} XLM</div>
+                                                    <div className="text-[9px] text-gray-400 mt-0.5">{item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : ""}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Outgoing Receipts (Waiting for Commuter Sync) */}
+                            {outgoingQueue.length > 0 && (
+                                <div className="space-y-2 pt-2">
+                                    <div className="text-[10px] font-black uppercase tracking-wider text-amber-500">📤 Outgoing Payments (Pending Sync)</div>
+                                    <div className="grid gap-2">
+                                        {outgoingQueue.map((item, idx) => (
+                                            <div key={idx} className={`p-3 rounded-xl border flex justify-between items-center ${dark ? 'bg-black/30 border-white/5' : 'bg-gray-50 border-gray-150'}`}>
+                                                <div className="text-left">
+                                                    <div className="text-xs font-bold text-gray-800 dark:text-gray-200">To: {item.recipient?.slice(0, 8)}...{item.recipient?.slice(-8)}</div>
+                                                    <div className="text-[9px] text-gray-400 font-mono mt-0.5">Sig: {item.signature?.slice(0, 12)}...</div>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-xs font-black text-amber-500">-{item.amount} XLM</div>
+                                                    <div className="text-[9px] text-gray-400 mt-0.5">{item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : ""}</div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             )}
             {renderUnifiedDashboard()}
@@ -530,6 +604,34 @@ const UserDashboard: React.FC = () => {
     const navigate = useNavigate();
 
     const refreshUser = async (uid: string) => {
+        if (!currentUser) {
+            const cached = localStorage.getItem("aranova_auth_profile");
+            if (cached) {
+                const data = JSON.parse(cached);
+                let liveBalance = data.walletBalance;
+                let liveVault = data.vaultBalance;
+                if (data.publicKey) {
+                    try {
+                        const stellarBal = await getLiveStellarBalance(data.publicKey);
+                        liveBalance = Number(stellarBal);
+                    } catch (e) {}
+                    try {
+                        const vaultBalBig = await getVaultBalanceOnChain(data.publicKey);
+                        liveVault = Number(vaultBalBig) / 10_000_000;
+                    } catch (e) {}
+                }
+                const updated = { ...data, walletBalance: liveBalance, vaultBalance: liveVault };
+                localStorage.setItem("aranova_auth_profile", JSON.stringify(updated));
+                
+                const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+                localUsers[uid] = updated;
+                localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
+
+                setUserData(updated);
+            }
+            return;
+        }
+
         const snap = await getDoc(doc(db, "users", uid));
         if (snap.exists()) {
             const data = snap.data() as any;
@@ -562,20 +664,29 @@ const UserDashboard: React.FC = () => {
 
     useEffect(() => {
         if (globalAuthLoading) return;
-        if (!currentUser) {
+        const localUser = localStorage.getItem("aranova_auth_user");
+        if (!currentUser && !localUser) {
             navigate("/auth");
             return;
         }
+
+        const activeUser = currentUser || (localUser ? JSON.parse(localUser) : null);
+        if (!activeUser) return;
 
         let isMounted = true;
 
         const initializeUser = async () => {
             let profile;
             try {
-                profile = await ensureUserProfile(currentUser);
+                if (currentUser) {
+                    profile = await ensureUserProfile(activeUser);
+                } else {
+                    const cached = localStorage.getItem("aranova_auth_profile");
+                    profile = cached ? JSON.parse(cached) : { uid: activeUser.uid, approved: true };
+                }
             } catch (err) {
                 console.warn("Retrying profile initialization due to timing/permission constraint...", err);
-                profile = authUserData || { uid: currentUser.uid, approved: true };
+                profile = authUserData || { uid: activeUser.uid, approved: true };
             }
 
             if (isMounted) {
@@ -588,7 +699,20 @@ const UserDashboard: React.FC = () => {
                     try {
                         const stellarBal = await getLiveStellarBalance(profile.publicKey);
                         if (Number(stellarBal) !== Number(profile.walletBalance)) {
-                            await updateDoc(doc(db, "users", currentUser.uid), { walletBalance: Number(stellarBal) });
+                            if (currentUser) {
+                                await updateDoc(doc(db, "users", activeUser.uid), { walletBalance: Number(stellarBal) });
+                            } else {
+                                const cached = localStorage.getItem("aranova_auth_profile");
+                                if (cached) {
+                                    const updated = { ...JSON.parse(cached), walletBalance: Number(stellarBal) };
+                                    localStorage.setItem("aranova_auth_profile", JSON.stringify(updated));
+                                    setUserData(updated);
+                                    
+                                    const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+                                    localUsers[activeUser.uid] = updated;
+                                    localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
+                                }
+                            }
                         }
                     } catch (e) {
                         console.warn("Could not sync initial live Stellar balance:", e);
@@ -597,7 +721,20 @@ const UserDashboard: React.FC = () => {
                         const vaultBalBig = await getVaultBalanceOnChain(profile.publicKey);
                         const onChainVault = Number(vaultBalBig) / 10_000_000;
                         if (onChainVault >= 0 && onChainVault !== Number(profile.vaultBalance || 0)) {
-                            await updateDoc(doc(db, "users", currentUser.uid), { vaultBalance: onChainVault });
+                            if (currentUser) {
+                                await updateDoc(doc(db, "users", activeUser.uid), { vaultBalance: onChainVault });
+                            } else {
+                                const cached = localStorage.getItem("aranova_auth_profile");
+                                if (cached) {
+                                    const updated = { ...JSON.parse(cached), vaultBalance: onChainVault };
+                                    localStorage.setItem("aranova_auth_profile", JSON.stringify(updated));
+                                    setUserData(updated);
+                                    
+                                    const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+                                    localUsers[activeUser.uid] = updated;
+                                    localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
+                                }
+                            }
                         }
                     } catch (e) {
                         console.warn("Could not sync initial live on-chain vault balance:", e);
@@ -608,8 +745,10 @@ const UserDashboard: React.FC = () => {
             if (isMounted) {
                 (async () => {
                     try {
-                        await maybeRunDailyTrustUpdate(profile);
-                        await recalculateAndSyncTrustScore(currentUser.uid);
+                        if (currentUser) {
+                            await maybeRunDailyTrustUpdate(profile);
+                            await recalculateAndSyncTrustScore(activeUser.uid);
+                        }
                     } catch (err) {
                         console.warn("Error updating trust score on load:", err);
                     }
@@ -619,11 +758,14 @@ const UserDashboard: React.FC = () => {
 
         initializeUser();
 
-        const userUnsub = onSnapshot(doc(db, "users", currentUser.uid), (snap) => {
-            if (snap.exists() && isMounted) {
-                setUserData({ uid: currentUser.uid, ...snap.data() });
-            }
-        }, (err) => console.warn("User profile snapshot error:", err));
+        let userUnsub = () => {};
+        if (currentUser) {
+            userUnsub = onSnapshot(doc(db, "users", activeUser.uid), (snap) => {
+                if (snap.exists() && isMounted) {
+                    setUserData({ uid: activeUser.uid, ...snap.data() });
+                }
+            }, (err) => console.warn("User profile snapshot error:", err));
+        }
 
         return () => {
             isMounted = false;
@@ -632,10 +774,21 @@ const UserDashboard: React.FC = () => {
     }, [globalAuthLoading, currentUser, navigate, authUserData]);
 
     useEffect(() => {
+        if (!currentUser) return; // Skip automatic online syncing in sandbox mode
         if (!userData?.uid) return;
-        syncBluetoothQueue(userData.uid).catch(() => undefined);
-        syncReceivedOfflinePayments(userData.uid).catch(() => undefined);
-    }, [userData?.uid]);
+        
+        const trySync = () => {
+            syncBluetoothQueue(userData.uid).catch(() => undefined);
+            syncReceivedOfflinePayments(userData.uid).catch(() => undefined);
+        };
+        
+        trySync();
+        
+        window.addEventListener("online", trySync);
+        return () => {
+            window.removeEventListener("online", trySync);
+        };
+    }, [userData?.uid, currentUser]);
 
     useEffect(() => {
         if (!userData?.publicKey) return;

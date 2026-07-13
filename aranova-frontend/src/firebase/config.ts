@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from "firebase/firestore";
+import { getFirestore, disableNetwork } from "firebase/firestore";
 
 const firebaseConfig = {
     apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -16,9 +16,14 @@ const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
 
-// Initialize Firestore with multi-tab offline cache support for real offline-first behavior
-export const db = initializeFirestore(app, {
-    localCache: persistentLocalCache({
-        tabManager: persistentMultipleTabManager()
-    })
-});
+// Enable conditional network disabling. If VITE_OFFLINE_SANDBOX is set to 'true',
+// we disable the network to save quota. Otherwise, keep it connected.
+let database = getFirestore(app);
+if (import.meta.env.VITE_OFFLINE_SANDBOX === "true") {
+    console.log("Firestore offline sandbox mode enabled (network disabled).");
+    disableNetwork(database).catch(() => undefined);
+} else {
+    console.log("Firestore online mode enabled (network connected).");
+}
+
+export const db = database;

@@ -26,7 +26,7 @@ import {
   queueBluetoothPayment,
 } from "../../services/aranovaWorkflow";
 
-const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 200 }) => {
+const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 180 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -38,16 +38,30 @@ const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size
   }, [text, size]);
 
   return (
-    <div className="flex justify-center my-4">
-      <div className="p-3 bg-white rounded-2xl shadow-lg">
+    <div className="flex justify-center my-4 animate-fadeIn">
+      <div className="p-2.5 bg-white rounded-2xl shadow-lg border border-gray-100">
         <canvas ref={canvasRef} className="rounded-xl max-w-full h-auto block" />
       </div>
     </div>
   );
 };
 
+
 const UserSend: React.FC = () => {
-  const { userData, loading: authLoading } = useAuth();
+  const { userData: contextUserData, loading: authLoading, currentUser } = useAuth();
+  const userData = (() => {
+    if (contextUserData) return contextUserData;
+    const cached = localStorage.getItem("aranova_auth_profile");
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (currentUser && parsed && parsed.uid === currentUser.uid) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
+    return null;
+  })();
   const { dark } = useTheme();
   const navigate = useNavigate();
   const [recipient, setRecipient] = useState("");
@@ -63,9 +77,10 @@ const UserSend: React.FC = () => {
   const [pinPurpose, setPinPurpose] = useState("");
   const [pinCallback, setPinCallback] = useState<((secret: string) => void) | null>(null);
 
-  // Offline Receipt QR Modal States
-  const [offlineReceipt, setOfflineReceipt] = useState<any | null>(null);
+  // Receipt Modal States
+  const [receiptData, setReceiptData] = useState<any | null>(null);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
+  const [showBackupQr, setShowBackupQr] = useState(false);
 
   // HTML5 QR Scanner
   useEffect(() => {
@@ -158,7 +173,7 @@ const UserSend: React.FC = () => {
           createdAt: serverTimestamp(),
         }).catch(() => undefined);
 
-        setOfflineReceipt(payloadObj);
+        setReceiptData({ ...payloadObj, channel: "offline" });
         setShowReceiptModal(true);
       });
       setShowPinModal(true);
@@ -243,8 +258,16 @@ const UserSend: React.FC = () => {
           });
           await recalculateAndSyncTrustScore(userData.uid);
 
-          alert("Payment completed successfully!");
-          navigate("/user");
+          setReceiptData({
+            type: "online_pay",
+            amount: value.toFixed(2),
+            payerName: userData.displayName || "Commuter",
+            recipient: destPublicKey,
+            timestamp: Date.now(),
+            blockchainTxHash: txHash,
+            channel: "online"
+          });
+          setShowReceiptModal(true);
         } catch (err: any) {
           console.error(err);
           alert(`Payment transaction failed: ${err.message || err}`);
@@ -423,26 +446,112 @@ const UserSend: React.FC = () => {
           </div>
         )}
         
-        {showReceiptModal && offlineReceipt && (
-          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6">
+        {showReceiptModal && receiptData && (
+          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6 animate-fadeIn">
             <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
-              <span className="text-3xl mb-3 block">📲</span>
-              <h3 className="text-lg font-black">Offline Payment Signed</h3>
-              <p className="text-xs text-gray-500 mt-1">Let the driver scan this receipt QR to collect funds offline.</p>
+              <div className="w-16 h-16 bg-[#10B981]/20 text-[#10B981] rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </div>
+              <h3 className="text-xl font-black">
+                {receiptData.channel === "offline" ? "Offline Payment Approved" : "Payment Completed"}
+              </h3>
+              <p className="text-xs text-gray-500 mt-2 font-medium px-2">
+                {receiptData.channel === "offline" 
+                  ? "Show this ticket to the driver for transit verification."
+                  : "Transaction successfully committed to the Stellar ledger."}
+              </p>
               
-              <OfflineQrCanvas text={JSON.stringify(offlineReceipt)} />
-
-              <div className="text-[10px] font-mono text-left bg-black/40 p-3 rounded-xl max-h-24 overflow-y-auto opacity-70">
-                <div><strong>Payer:</strong> {offlineReceipt.payerName}</div>
-                <div><strong>Amount:</strong> {offlineReceipt.amount} XLM</div>
-                <div><strong>Sig:</strong> {offlineReceipt.signature.slice(0, 16)}...</div>
+              {/* Premium Ticket Receipt representation */}
+              <div className={`my-6 p-5 rounded-2xl border text-left space-y-3 relative overflow-hidden ${dark ? "bg-black/30 border-white/5" : "bg-gray-50 border-gray-100"}`}>
+                <div className="absolute top-0 right-0 transform translate-x-3 -translate-y-3 w-10 h-10 rounded-full border border-dashed opacity-10" />
+                <div className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                  Aranova {receiptData.channel === "offline" ? "Transit Ticket" : "Payment Receipt"}
+                </div>
+                <div className="flex justify-between items-baseline border-b border-dashed pb-2 border-gray-200 dark:border-white/5">
+                  <span className="text-xs font-bold text-gray-500">Amount Paid</span>
+                  <span className="text-xl font-black">{receiptData.amount} XLM</span>
+                </div>
+                <div className="space-y-1.5 pt-1 text-[10px] font-semibold text-gray-500">
+                  <div className="flex justify-between">
+                    <span>Payer:</span>
+                    <span className="font-mono text-gray-800 dark:text-gray-200">{receiptData.payerName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Recipient (Driver):</span>
+                    <span className="font-mono text-gray-800 dark:text-gray-200">
+                      {receiptData.recipient.slice(0, 10)}...{receiptData.recipient.slice(-10)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Timestamp:</span>
+                    <span className="text-gray-800 dark:text-gray-200">
+                      {new Date(receiptData.timestamp).toLocaleTimeString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Network / Channel:</span>
+                    <span className="text-gray-800 dark:text-gray-200 uppercase tracking-wider font-bold">
+                      {receiptData.channel === "offline" ? "Offline (Queued)" : "Online (Stellar)"}
+                    </span>
+                  </div>
+                  {receiptData.signature && (
+                    <div className="flex justify-between pt-1.5 border-t border-dashed border-gray-200 dark:border-white/5">
+                      <span>Proof Signature:</span>
+                      <span className="font-mono text-[9px] text-[#10B981]">{receiptData.signature.slice(0, 16)}...</span>
+                    </div>
+                  )}
+                  {receiptData.blockchainTxHash && (
+                    <div className="flex justify-between pt-1.5 border-t border-dashed border-gray-200 dark:border-white/5">
+                      <span>Ledger Hash:</span>
+                      <span className="font-mono text-[9px] text-[#3B82F6]">{receiptData.blockchainTxHash.slice(0, 16)}...</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
+              {receiptData.channel === "offline" && (
+                <>
+                  <button
+                    onClick={() => setShowBackupQr((prev) => !prev)}
+                    className={`w-full py-3 mb-4 rounded-xl font-bold text-[10px] uppercase tracking-wider border transition-all ${
+                      showBackupQr
+                        ? "bg-amber-500/10 border-amber-500/20 text-amber-500"
+                        : dark
+                        ? "border-white/10 text-gray-400 hover:bg-white/5"
+                        : "border-gray-200 text-gray-500 hover:bg-gray-50"
+                    }`}
+                  >
+                    {showBackupQr ? "Hide Backup QR" : "Show Backup QR Ticket"}
+                  </button>
+
+                  {showBackupQr && (
+                    <div className="mb-4 text-center">
+                      <p className="text-[9px] text-gray-400 px-2 mb-2 leading-normal">
+                        Let the driver scan this QR code to copy the receipt to their device. This secures your payment proof in case you reset your browser cache.
+                      </p>
+                      <OfflineQrCanvas text={JSON.stringify(receiptData)} />
+                    </div>
+                  )}
+
+                  <div className="p-3 bg-amber-500/10 text-amber-500 text-[10px] font-bold rounded-xl mb-4 leading-normal">
+                    ⚠️ Payment queued locally. Funds will settle on-chain automatically once you reconnect to the network.
+                  </div>
+                </>
+              )}
+
+              {receiptData.channel === "online" && (
+                <div className="p-3 bg-green-500/10 text-[#10B981] text-[10px] font-bold rounded-xl mb-4 leading-normal">
+                  ✓ Ledger transaction completed. Balance has been settled.
+                </div>
+              )}
+
               <button 
-                onClick={() => { setShowReceiptModal(false); setOfflineReceipt(null); navigate("/user"); }} 
-                className={`w-full mt-6 py-3.5 rounded-xl font-black text-xs uppercase tracking-wider ${btnColor} ${textColor} ${btnHover}`}
+                onClick={() => { setShowReceiptModal(false); setReceiptData(null); setShowBackupQr(false); navigate("/user"); }} 
+                className={`w-full mt-6 py-3.5 rounded-xl font-black text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 ${btnColor} ${textColor} ${btnHover}`}
               >
-                Close & Return
+                Done
               </button>
             </div>
           </div>

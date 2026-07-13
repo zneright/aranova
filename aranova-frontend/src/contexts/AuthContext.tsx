@@ -31,13 +31,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const cachedProfile = localStorage.getItem("aranova_auth_profile");
         if (cachedUser && cachedProfile) {
             try {
-                setCurrentUser(JSON.parse(cachedUser));
-                setUserData(JSON.parse(cachedProfile));
-                setLoading(false);
+                const parsedUser = JSON.parse(cachedUser);
+                const parsedProfile = JSON.parse(cachedProfile);
+                if (parsedUser && parsedProfile && parsedUser.uid === parsedProfile.uid) {
+                    setCurrentUser(parsedUser);
+                    setUserData(parsedProfile);
+                    setLoading(false);
+                }
             } catch (e) {
                 console.warn("Failed to load local cached auth credentials:", e);
             }
         }
+
+
 
         const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
             if (unsubDoc) {
@@ -54,30 +60,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }));
 
                 // Listen to the user's document in Firestore (uses Firestore offline IndexedDB cache)
-                unsubDoc = onSnapshot(doc(db, "users", user.uid), (docSnap) => {
-                    if (docSnap.exists()) {
-                        const data = { uid: user.uid, ...docSnap.data() };
-                        setUserData(data);
-                        localStorage.setItem("aranova_auth_profile", JSON.stringify(data));
-                    }
-                    setLoading(false);
-                }, (error) => {
-                    console.error("Firestore snapshot error:", error);
-                    // Fall back to local storage profile if offline or blocked
-                    const localProfile = localStorage.getItem("aranova_auth_profile");
-                    if (localProfile) {
+                if (localStorage.getItem("aranova_firestore_exhausted") === "true") {
+                    const localProfileStr = localStorage.getItem("aranova_auth_profile");
+                    if (localProfileStr) {
                         try {
-                            setUserData(JSON.parse(localProfile));
+                            const parsed = JSON.parse(localProfileStr);
+                            if (parsed && parsed.uid === user.uid) {
+                                setUserData(parsed);
+                            }
                         } catch (e) {}
                     }
                     setLoading(false);
-                });
+                } else {
+                    unsubDoc = onSnapshot(doc(db, "users", user.uid), (docSnap) => {
+                        if (docSnap.exists()) {
+                            const data = { uid: user.uid, ...docSnap.data() };
+                            setUserData(data);
+                            localStorage.setItem("aranova_auth_profile", JSON.stringify(data));
+                        }
+                        setLoading(false);
+                    }, (error) => {
+                        console.error("Firestore snapshot error:", error);
+                        const errorMsg = error.message || "";
+                        if (errorMsg.toLowerCase().includes("quota") || errorMsg.toLowerCase().includes("exhausted") || error.code === "permission-denied") {
+                            localStorage.setItem("aranova_firestore_exhausted", "true");
+                        }
+                        // Fall back to local storage profile if offline or blocked
+                        const localProfileStr = localStorage.getItem("aranova_auth_profile");
+                        if (localProfileStr) {
+                            try {
+                                const parsed = JSON.parse(localProfileStr);
+                                if (parsed && parsed.uid === user.uid) {
+                                    setUserData(parsed);
+                                }
+                            } catch (e) {}
+                        }
+                        setLoading(false);
+                    });
+                }
             } else {
-                setCurrentUser(null);
-                setUserData(null);
-                localStorage.removeItem("aranova_auth_user");
-                localStorage.removeItem("aranova_auth_profile");
-                setLoading(false);
+                const isSandbox = import.meta.env.VITE_OFFLINE_SANDBOX === "true" || localStorage.getItem("aranova_firestore_exhausted") === "true";
+                const localUser = localStorage.getItem("aranova_auth_user");
+                if (isSandbox && localUser) {
+                    setLoading(false);
+                } else {
+                    setCurrentUser(null);
+                    setUserData(null);
+                    localStorage.removeItem("aranova_auth_user");
+                    localStorage.removeItem("aranova_auth_profile");
+                    setLoading(false);
+                }
             }
         });
         
