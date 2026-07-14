@@ -2,9 +2,10 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
-import { Keypair, Networks, Transaction } from "@stellar/stellar-sdk";
-import CryptoJS from "crypto-js";
+import { Keypair, Transaction } from "@stellar/stellar-sdk";
+import { NETWORK_PASSPHRASE } from "../services/sorobanService";
 import { auth, db } from "../firebase/config";
+import { encryptWithPin } from "../services/aranovaWorkflow";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
 import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
 import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
@@ -136,10 +137,11 @@ const AuthPage: React.FC = () => {
   useEffect(() => {
     // 1. If user is already logged in, handle redirection or setup recovery
     const user = auth.currentUser || JSON.parse(localStorage.getItem("aranova_auth_user") || "null");
-    const profile = JSON.parse(localStorage.getItem("aranova_auth_profile") || "null");
+    const profileKey = user ? `aranova_auth_profile_${user.uid}` : "aranova_auth_profile";
+    const profile = JSON.parse(localStorage.getItem(profileKey) || "null");
     if (user && profile) {
       if (profile.walletCreated && profile.publicKey) {
-        if (profile.role === "admin" || user.email?.includes("admin")) {
+        if (profile.role === "admin") {
           navigate("/admin");
         } else {
           navigate("/user");
@@ -186,11 +188,12 @@ const AuthPage: React.FC = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const returnedXdr = params.get("xdr") || params.get("signedXdr");
+    const signature = params.get("signature");
     let pubKey = params.get("pubkey") || params.get("address") || params.get("publicKey");
 
     if (!pubKey && returnedXdr) {
       try {
-        const tx = new Transaction(returnedXdr, Networks.PUBLIC);
+        const tx = new Transaction(returnedXdr, NETWORK_PASSPHRASE);
         pubKey = tx.source;
       } catch (err) {
         console.error("Failed to parse returned SEP-0007 XDR:", err);
@@ -198,6 +201,40 @@ const AuthPage: React.FC = () => {
     }
 
     if (pubKey) {
+      // ─── CRYPTOGRAPHIC SIGNATURE VERIFICATION ───
+      try {
+        if (returnedXdr) {
+          const tx = new Transaction(returnedXdr, NETWORK_PASSPHRASE);
+          const hash = tx.hash();
+          const keypair = Keypair.fromPublicKey(pubKey);
+          let txHasValidSignature = false;
+          for (const sig of tx.signatures) {
+            if (keypair.verify(hash, sig.signature())) {
+              txHasValidSignature = true;
+              break;
+            }
+          }
+          if (!txHasValidSignature) {
+            throw new Error("Transaction signature is invalid or does not match public key.");
+          }
+        } else if (signature) {
+          const message = "Aranova Authentication message signature";
+          const isValid = Keypair.fromPublicKey(pubKey).verify(
+            Buffer.from(message),
+            Buffer.from(signature, "hex")
+          );
+          if (!isValid) {
+            throw new Error("Message signature verification failed.");
+          }
+        } else {
+          throw new Error("Missing signature or signed transaction payload for callback.");
+        }
+      } catch (verifyErr: any) {
+        console.error("Cryptographic signature verification failed:", verifyErr);
+        alert("Wallet signature verification failed: " + verifyErr.message);
+        return;
+      }
+
       const runMobileConnectSubmit = async () => {
         try {
           setLoading(true);
@@ -205,10 +242,10 @@ const AuthPage: React.FC = () => {
           
           const user = auth.currentUser || JSON.parse(localStorage.getItem("aranova_auth_user") || "null");
           if (user) {
-            const cachedProfile = localStorage.getItem("aranova_auth_profile");
+            const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
             if (cachedProfile) {
               const profileData = { ...JSON.parse(cachedProfile), walletCreated: true, publicKey: pubKey, network: "PUBLIC" };
-              localStorage.setItem("aranova_auth_profile", JSON.stringify(profileData));
+              localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify(profileData));
               const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
               localUsers[user.uid] = profileData;
               localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
@@ -325,19 +362,15 @@ const AuthPage: React.FC = () => {
       }
 
       // ─── SIGNATURE REQUEST ───
-      try {
-        const authMessage = `Aranova Authentication\n\nPlease sign to verify ownership.\nTimestamp: ${Date.now()}`;
-        const currentNetworkPassphrase = activeNetwork === "TESTNET"
-          ? "Test SDF Network ; September 2015"
-          : "Public Global Stellar Network ; September 2015";
+      const authMessage = `Aranova Authentication\n\nPlease sign to verify ownership.\nTimestamp: ${Date.now()}`;
+      const currentNetworkPassphrase = activeNetwork === "TESTNET"
+        ? "Test SDF Network ; September 2015"
+        : "Public Global Stellar Network ; September 2015";
 
-        await walletModule.signMessage(authMessage, {
-          networkPassphrase: currentNetworkPassphrase,
-          publicKey: publicKey
-        });
-      } catch (signError: any) {
-        console.warn("Signature request skipped or failed, proceeding with wallet connection:", signError);
-      }
+      await walletModule.signMessage(authMessage, {
+        networkPassphrase: currentNetworkPassphrase,
+        publicKey: publicKey
+      });
 
       setConnectPubKey(publicKey);
       await autoSubmitExternalWallet(publicKey, activeNetwork);
@@ -364,11 +397,11 @@ const AuthPage: React.FC = () => {
         };
 
         // Backup locally
-        const cachedProfile = localStorage.getItem("aranova_auth_profile");
+        const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
         if (cachedProfile) {
           const current = JSON.parse(cachedProfile);
           const profileData = { ...current, ...updateData };
-          localStorage.setItem("aranova_auth_profile", JSON.stringify(profileData));
+          localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify(profileData));
           
           const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
           localUsers[user.uid] = profileData;
@@ -385,7 +418,13 @@ const AuthPage: React.FC = () => {
           console.log("Local sandbox user detected, skipping Firebase write.");
         }
 
-        if (form.email.includes("admin")) navigate("/admin");
+        const profileForNav = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
+        let userRole = "commuter";
+        if (profileForNav) {
+          const current = JSON.parse(profileForNav);
+          userRole = current.role || "commuter";
+        }
+        if (userRole === "admin") navigate("/admin");
         else navigate("/user");
       }
     } catch (err) {
@@ -430,7 +469,9 @@ const AuthPage: React.FC = () => {
     } catch (error: any) {
       console.error("Firebase Auth Error:", error);
       if (error.code === "auth/user-not-found") {
-        setErrors({ email: "No account found with this email." });
+        // Prevent user enumeration: pretend it succeeded
+        setForgotMode("success");
+        setErrors({});
       } else {
         setErrors({ email: "Failed to send reset link. Please try again." });
       }
@@ -457,7 +498,10 @@ const AuthPage: React.FC = () => {
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(form.email)) e.email = "Enter a valid email address.";
-    if (form.password.length < 8) e.password = "Password must be at least 8 characters.";
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$/;
+    if (!passwordRegex.test(form.password)) {
+      e.password = "Password must be at least 8 characters and contain uppercase, lowercase, number, and special character.";
+    }
 
     if (!isLogin) {
       if (!form.name.trim()) e.name = "Name is required.";
@@ -487,30 +531,30 @@ const AuthPage: React.FC = () => {
     setErrors({});
 
     // Force local sandbox mode check if configured or Firebase quota exceeded
-    const isExhausted = import.meta.env.VITE_OFFLINE_SANDBOX === "true" || localStorage.getItem("aranova_firestore_exhausted") === "true"; 
+    const isExhausted = import.meta.env.VITE_OFFLINE_SANDBOX === "true"; 
     if (isExhausted) {
       if (authSuccess) {
         const user = JSON.parse(localStorage.getItem("aranova_auth_user") || "null");
         if (user) {
           const updateData: any = { walletCreated: true };
           if (walletMode === "create" && generatedKeys) {
-            const encryptedSecret = CryptoJS.AES.encrypt(generatedKeys.sec, walletPin).toString();
+            const encryptedSecret = encryptWithPin(generatedKeys.sec, walletPin);
             updateData.publicKey = generatedKeys.pub;
             updateData.encryptedSecretKey = encryptedSecret;
             updateData.network = "PUBLIC";
           } else if (walletMode === "connect") {
             updateData.publicKey = connectPubKey;
           }
-          const cachedProfile = localStorage.getItem("aranova_auth_profile");
+          const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
           if (cachedProfile) {
             const profileData = { ...JSON.parse(cachedProfile), ...updateData };
-            localStorage.setItem("aranova_auth_profile", JSON.stringify(profileData));
+            localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify(profileData));
             const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
             localUsers[user.uid] = profileData;
             localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
+            if (profileData.role === "admin") navigate("/admin");
+            else navigate("/user");
           }
-          if (form.email.includes("admin")) navigate("/admin");
-          else navigate("/user");
         }
       } else if (isLogin) {
         const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
@@ -521,7 +565,7 @@ const AuthPage: React.FC = () => {
             email: localUser.email,
             displayName: localUser.displayName
           }));
-          localStorage.setItem("aranova_auth_profile", JSON.stringify(localUser));
+          localStorage.setItem(`aranova_auth_profile_${localUser.uid}`, JSON.stringify(localUser));
           if (localUser.walletCreated === false || !localUser.publicKey) {
             setAuthSuccess(true);
           } else {
@@ -548,7 +592,7 @@ const AuthPage: React.FC = () => {
             mockProfile.displayName = "Metro Transport Cooperative";
           }
           localStorage.setItem("aranova_auth_user", JSON.stringify({ uid: mockUid, email: form.email, displayName: mockProfile.displayName }));
-          localStorage.setItem("aranova_auth_profile", JSON.stringify(mockProfile));
+          localStorage.setItem(`aranova_auth_profile_${mockUid}`, JSON.stringify(mockProfile));
           localUsers[mockUid] = mockProfile;
           localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
           
@@ -576,7 +620,7 @@ const AuthPage: React.FC = () => {
         }
 
         localStorage.setItem("aranova_auth_user", JSON.stringify({ uid: mockUid, email: form.email, displayName: form.name }));
-        localStorage.setItem("aranova_auth_profile", JSON.stringify(userData));
+        localStorage.setItem(`aranova_auth_profile_${mockUid}`, JSON.stringify(userData));
 
         const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
         localUsers[mockUid] = userData;
@@ -586,7 +630,7 @@ const AuthPage: React.FC = () => {
           setMode("login");
           setAuthSuccess(true);
         } else {
-          if (form.email.includes("admin") || role === "admin") navigate("/admin");
+          if (role === "admin") navigate("/admin");
           else navigate("/user");
         }
       }
@@ -601,25 +645,25 @@ const AuthPage: React.FC = () => {
           const updateData: any = { walletCreated: true };
 
           if (walletMode === "create" && generatedKeys) {
-            const encryptedSecret = CryptoJS.AES.encrypt(generatedKeys.sec, walletPin).toString();
+            const encryptedSecret = encryptWithPin(generatedKeys.sec, walletPin);
             updateData.publicKey = generatedKeys.pub;
             updateData.encryptedSecretKey = encryptedSecret;
             updateData.network = "PUBLIC";
             
             // Backup locally
-            const cachedProfile = localStorage.getItem("aranova_auth_profile");
+            const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
             if (cachedProfile) {
               const current = JSON.parse(cachedProfile);
-              localStorage.setItem("aranova_auth_profile", JSON.stringify({ ...current, ...updateData }));
+              localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify({ ...current, ...updateData }));
             }
           } else if (walletMode === "connect") {
             updateData.publicKey = connectPubKey;
             
             // Backup locally
-            const cachedProfile = localStorage.getItem("aranova_auth_profile");
+            const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
             if (cachedProfile) {
               const current = JSON.parse(cachedProfile);
-              localStorage.setItem("aranova_auth_profile", JSON.stringify({ ...current, ...updateData }));
+              localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify({ ...current, ...updateData }));
             }
           }
 
@@ -629,7 +673,13 @@ const AuthPage: React.FC = () => {
             console.warn("Saving wallet to server database failed (quota limit), saved locally:", dbErr);
           }
 
-          if (form.email.includes("admin")) navigate("/admin");
+          const cachedProfile = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
+          let userRole = "commuter";
+          if (cachedProfile) {
+            const current = JSON.parse(cachedProfile);
+            userRole = current.role || "commuter";
+          }
+          if (userRole === "admin") navigate("/admin");
           else navigate("/user");
         }
       }
@@ -650,7 +700,7 @@ const AuthPage: React.FC = () => {
                 email: localUser.email,
                 displayName: localUser.displayName
               }));
-              localStorage.setItem("aranova_auth_profile", JSON.stringify(localUser));
+              localStorage.setItem(`aranova_auth_profile_${localUser.uid}`, JSON.stringify(localUser));
               alert("⚠️ Logged in using local offline sandbox profile.");
               if (localUser.role === "admin") navigate("/admin");
               else navigate("/user");
@@ -670,15 +720,15 @@ const AuthPage: React.FC = () => {
               email: cred.user.email,
               displayName: userData.displayName || ""
             }));
-            localStorage.setItem("aranova_auth_profile", JSON.stringify(userData));
+            localStorage.setItem(`aranova_auth_profile_${userData.uid}`, JSON.stringify(userData));
 
             if (userData.approved === false) {
-              if (userData.role === "admin" || form.email.includes("admin")) navigate("/admin");
+              if (userData.role === "admin") navigate("/admin");
               else navigate("/user");
             } else if (userData.walletCreated === false || !userData.publicKey) {
               setAuthSuccess(true);
             } else {
-              if (userData.role === "admin" || form.email.includes("admin")) navigate("/admin");
+              if (userData.role === "admin") navigate("/admin");
               else navigate("/user");
             }
           } else {
@@ -686,7 +736,7 @@ const AuthPage: React.FC = () => {
           }
         } catch (dbErr: any) {
           console.warn("Firestore profile loading failed (quota exceeded), reading local storage:", dbErr);
-          const cachedProfile = localStorage.getItem("aranova_auth_profile");
+          const cachedProfile = localStorage.getItem(`aranova_auth_profile_${cred.user.uid}`);
           if (cachedProfile) {
             const data = JSON.parse(cachedProfile);
             if (data.uid === cred.user.uid) {
@@ -755,7 +805,7 @@ const AuthPage: React.FC = () => {
             email: form.email,
             displayName: form.name
           }));
-          localStorage.setItem("aranova_auth_profile", JSON.stringify(userData));
+          localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify(userData));
 
           const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
           localUsers[user.uid] = userData;
@@ -768,7 +818,7 @@ const AuthPage: React.FC = () => {
           setMode("login");
           setAuthSuccess(true);
         } else {
-          if (form.email.includes("admin") || (role as string) === "admin") navigate("/admin");
+          if ((role as string) === "admin") navigate("/admin");
           else navigate("/user");
         }
       }
@@ -805,7 +855,7 @@ const AuthPage: React.FC = () => {
           email: form.email,
           displayName: form.name
         }));
-        localStorage.setItem("aranova_auth_profile", JSON.stringify(userData));
+        localStorage.setItem(`aranova_auth_profile_${mockUid}`, JSON.stringify(userData));
 
         const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
         localUsers[mockUid] = userData;

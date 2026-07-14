@@ -3,7 +3,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useTheme } from "../../contexts/ThemeContext";
 import UserLayout from "../../components/layout/UserLayout";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
-import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, doc, setDoc, updateDoc, increment } from "firebase/firestore";
+import { collection, query, where, onSnapshot, orderBy, limit, addDoc, serverTimestamp, doc } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { formatXlm } from "../../services/aranovaWorkflow";
 

@@ -1,7 +1,8 @@
-import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, increment } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where, increment, runTransaction } from "firebase/firestore";
 import { db } from "../firebase/config";
+import CryptoJS from "crypto-js";
 
-export const ADMIN_PUBLIC_KEY = "GADMINPABORANOVAPLACEHOLDERRRRRRRRRRRRRRRRRRRRRRRRRRRRA";
+export const ADMIN_PUBLIC_KEY = import.meta.env.VITE_ADMIN_PUBLIC_KEY || "GBCCH2V73VZ7X4A7Y47M3X6JCEHHR3Y24O4FDR3PZ5MZEZNZWYYUP77X";
 export const dayMs = 24 * 60 * 60 * 1000;
 
 export type UserRole = "commuter" | "driver" | "cooperative";
@@ -21,8 +22,6 @@ export const defaultPolicy: Policy = {
 };
 
 export const formatXlm = (value: number) => Number(value || 0).toFixed(2);
-
-export const makePublicKey = (uid: string) => `G${uid.replace(/[^a-zA-Z0-9]/g, "").slice(0, 55)}`.padEnd(56, "A");
 
 export const toDurationDays = (value: number, unit: Policy["durationUnit"]) => {
     switch (unit) {
@@ -73,7 +72,7 @@ export const ensureUserProfile = async (user: any) => {
             displayName: user.displayName || "New User",
             role: "commuter" as UserRole,
             approved: true,
-            publicKey: makePublicKey(user.uid),
+            publicKey: "",
             walletBalance: 100,
             vaultBalance: 0,
             trustScore: 0,
@@ -93,66 +92,33 @@ export const recalculateAndSyncTrustScore = async (userId: string) => {
         const userRef = doc(db, "users", userId);
         const userSnap = await getDoc(userRef);
         if (!userSnap.exists()) return 0;
-        
-        let score = 0; // Starting baseline
-        const now = Date.now();
+        const userData = userSnap.data();
 
-        // 1. Vault locks (+1 point for every 5 XLM locked)
-        const vaultSnap = await getDocs(query(collection(db, "vaults"), where("ownerId", "==", userId)));
-        vaultSnap.forEach((docSnap) => {
-            const v = docSnap.data();
-            const lockedAmount = Number(v.lockedAmount || 0);
-            if (v.status === "locked") {
-                score += Math.floor(lockedAmount / 5);
-            } else if (v.status === "redeemed") {
-                score += 10; // Lifecycle completed reward
-            }
-        });
-
-        // 2. Admin Loan repayments and daily bonuses (type:"loan" only — never mix with fuel_credit)
-        const loanSnap = await getDocs(query(collection(db, "fuel_requests"), where("driverId", "==", userId), where("type", "==", "loan")));
-        const repaidDates: Set<string> = new Set();
+        let finalScore = 30; // starting baseline to prevent bootstrapping deadlock
         
-        loanSnap.forEach((docSnap) => {
-            const loan = docSnap.data();
-            if (loan.status === "repaid") {
-                score += 5; // Standard repayment points
-                
-                // Add daily bonus tracking
-                const repaidAtDate = parseTimestamp(loan.repaidAt || loan.createdAt);
-                if (repaidAtDate) {
-                    const dateKey = repaidAtDate.toISOString().split("T")[0]; // YYYY-MM-DD
-                    repaidDates.add(dateKey);
+        try {
+            const { getTrustScoreOnChain } = await import("./sorobanService");
+            if (userData.publicKey) {
+                const onChainScore = await getTrustScoreOnChain(userData.publicKey);
+                if (onChainScore >= 0n) {
+                    finalScore = Number(onChainScore);
                 }
             }
-        });
+        } catch (chainErr) {
+            console.warn("Failed to retrieve authoritative trust score from blockchain:", chainErr);
+            // Default fallback logic if offline/blockchain not configured
+            let fallbackScore = 30;
+            const vaultSnap = await getDocs(query(collection(db, "vaults"), where("ownerId", "==", userId)));
+            let vaultPoints = 0;
+            vaultSnap.forEach((docSnap) => {
+                const v = docSnap.data();
+                if (v.status === "locked") vaultPoints += Math.floor(Number(v.lockedAmount || 0) / 5);
+                else if (v.status === "redeemed") vaultPoints += 10;
+            });
+            fallbackScore += Math.min(50, vaultPoints);
+            finalScore = Math.max(0, fallbackScore);
+        }
 
-        // Add +2 points for every unique day a loan was settled
-        score += repaidDates.size * 2;
-
-        // 3. Penalize active loans that are past their due date
-        loanSnap.forEach((docSnap) => {
-            const loan = docSnap.data();
-            if (loan.status === "active") {
-                const approvedAt = parseTimestamp(loan.approvedAt || loan.createdAt);
-                if (approvedAt) {
-                    const durationDays = Number(loan.durationDays || 30);
-                    const dueDate = approvedAt.getTime() + durationDays * 24 * 60 * 60 * 1000;
-                    
-                    if (now > dueDate) {
-                        const msOverdue = now - dueDate;
-                        const daysOverdue = Math.floor(msOverdue / (24 * 60 * 60 * 1000));
-                        
-                        // Penalty: -20 base points + (-5 points for each full day overdue)
-                        score -= (20 + daysOverdue * 5);
-                    }
-                }
-            }
-        });
-
-        // Lower limit is 0
-        const finalScore = Math.max(0, score);
-        
         await updateDoc(userRef, {
             trustScore: finalScore,
             lastTrustUpdate: serverTimestamp()
@@ -161,7 +127,7 @@ export const recalculateAndSyncTrustScore = async (userId: string) => {
         return finalScore;
     } catch (error) {
         console.error("Error recalculating trust score:", error);
-        return 0;
+        return 30;
     }
 };
 
@@ -222,8 +188,11 @@ export const maybeRunDailyTrustUpdate = async (userData: any) => {
                             liquidatedFromVault: increment(redirectAmount)
                         });
 
-                        // Credit Cooperative pool
-                        await setDoc(doc(db, "coop_stats", loan.coopId), {
+                        // Credit Cooperative pool (route to admin_stats if coopId is 'admin' or empty)
+                        const destStatsCol = (!loan.coopId || loan.coopId === "admin") ? "admin_stats" : "coop_stats";
+                        const destStatsId = (!loan.coopId || loan.coopId === "admin") ? "global" : loan.coopId;
+
+                        await setDoc(doc(db, destStatsCol, destStatsId), {
                             poolBalance: increment(redirectAmount),
                             totalRepaid: increment(redirectAmount),
                             outstanding: increment(-redirectAmount),
@@ -260,42 +229,269 @@ export const queueBluetoothPayment = (userId: string, payload: any) => {
 
 export const syncBluetoothQueue = async (userId: string) => {
     if (!navigator.onLine) return;
-    const key = `aranova_offline_queue_${userId}`;
-    const queued = JSON.parse(localStorage.getItem(key) || "[]") as any[];
-    if (!queued.length) return;
 
-    for (const payment of queued) {
-        const amt = Number(payment.amount || 0);
-        if (amt <= 0) continue;
+    // Concurrency Lock
+    const lockKey = `aranova_sync_lock_${userId}`;
+    const isLocked = localStorage.getItem(lockKey);
+    if (isLocked) {
+        const lockTime = Number(isLocked);
+        if (Date.now() - lockTime < 10000) {
+            console.warn("Queue sync is already running in another tab.");
+            return;
+        }
+    }
+    localStorage.setItem(lockKey, Date.now().toString());
 
-        try {
-            // Deduct commuter's balance
-            await updateDoc(doc(db, "users", userId), {
-                walletBalance: increment(-amt)
-            });
+    // 1. Process Outgoing Queue (Payer)
+    const outgoingKey = `aranova_offline_queue_${userId}`;
+    const outgoing = JSON.parse(localStorage.getItem(outgoingKey) || "[]") as any[];
+    if (outgoing.length > 0) {
+        const failedOutgoing: any[] = [];
+        for (const payment of outgoing) {
+            const amt = Number(payment.amount || 0);
+            if (amt <= 0) continue;
 
-            // Credit driver's balance by matching driver public key
-            const qRecipient = query(collection(db, "users"), where("publicKey", "==", payment.recipient));
-            const recipientDocs = await getDocs(qRecipient);
-            if (!recipientDocs.empty) {
-                const driverId = recipientDocs.docs[0].id;
-                await updateDoc(doc(db, "users", driverId), {
-                    walletBalance: increment(amt)
+            try {
+                // Database transaction update
+                const commuterRef = doc(db, "users", userId);
+                await runTransaction(db, async (transaction) => {
+                    const commuterDoc = await transaction.get(commuterRef);
+                    if (!commuterDoc.exists()) {
+                        throw new Error("Commuter profile not found.");
+                    }
+                    const currentBalance = Number(commuterDoc.data().walletBalance || 0);
+                    if (currentBalance < amt) {
+                        throw new Error("Insufficient balance on server.");
+                    }
+                    transaction.update(commuterRef, {
+                        walletBalance: increment(-amt)
+                    });
                 });
-            }
 
-            await addDoc(collection(db, "transactions"), {
-                type: "bluetooth_payment",
-                from: userId,
-                to: payment.recipient,
-                amount: amt,
-                status: "synced",
-                createdAt: serverTimestamp(),
-            });
-        } catch (err) {
-            console.error("Failed to sync offline payment:", err);
+                // Credit recipient
+                const qRecipient = query(collection(db, "users"), where("publicKey", "==", payment.recipient));
+                const recipientDocs = await getDocs(qRecipient);
+                if (!recipientDocs.empty) {
+                    const driverId = recipientDocs.docs[0].id;
+                    await updateDoc(doc(db, "users", driverId), {
+                        walletBalance: increment(amt)
+                    });
+                }
+
+                // Submit native Stellar payment transaction if private key is stored
+                try {
+                    const secret = localStorage.getItem(`aranova_wallet_secret_${userId}`);
+                    if (secret) {
+                        const { Keypair, TransactionBuilder, Operation, Asset, Horizon } = await import("@stellar/stellar-sdk");
+                        const kp = Keypair.fromSecret(secret);
+                        const serverUrl = import.meta.env.VITE_HORIZON_URL || "https://horizon-testnet.stellar.org";
+                        const server = new Horizon.Server(serverUrl);
+                        const sourceAccount = await server.loadAccount(kp.publicKey());
+                        const tx = new TransactionBuilder(sourceAccount, {
+                            fee: "100",
+                            networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || "Test Stellar Network ; September 2015"
+                        })
+                        .addOperation(Operation.payment({
+                            destination: payment.recipient,
+                            asset: Asset.native(),
+                            amount: amt.toFixed(7)
+                        }))
+                        .setTimeout(30)
+                        .build();
+                        tx.sign(kp);
+                        await server.submitTransaction(tx);
+                    }
+                } catch (stellarErr) {
+                    console.warn("Stellar on-chain sync failed for outgoing payment:", stellarErr);
+                }
+
+                const txDocId = payment.nonce || payment.id;
+                await setDoc(doc(db, "transactions", txDocId), {
+                    type: "bluetooth_payment",
+                    from: userId,
+                    to: payment.recipient,
+                    amount: amt,
+                    status: "synced",
+                    createdAt: serverTimestamp(),
+                });
+
+                const pendingKey = `aranova_pending_offline_deductions_${userId}`;
+                const currentPending = Number(localStorage.getItem(pendingKey) || "0");
+                localStorage.setItem(pendingKey, Math.max(0, currentPending - amt).toString());
+            } catch (err) {
+                console.error("Failed to sync outgoing offline payment:", err);
+                failedOutgoing.push(payment);
+            }
+        }
+        if (failedOutgoing.length) {
+            localStorage.setItem(outgoingKey, JSON.stringify(failedOutgoing));
+        } else {
+            localStorage.removeItem(outgoingKey);
         }
     }
 
-    localStorage.removeItem(key);
+    // 2. Process Received Queue (Receiver with double-signed receipts)
+    const recKey = `aranova_received_offline_${userId}`;
+    const received = JSON.parse(localStorage.getItem(recKey) || "[]") as any[];
+    if (received.length > 0) {
+        const failedReceived: any[] = [];
+        for (const receipt of received) {
+            const amt = Number(receipt.amount || 0);
+            if (amt <= 0) continue;
+
+            try {
+                // Deduct payer
+                const qPayer = query(collection(db, "users"), where("publicKey", "==", receipt.payerKey));
+                const payerDocs = await getDocs(qPayer);
+                if (!payerDocs.empty) {
+                    const payerId = payerDocs.docs[0].id;
+                    const payerRef = doc(db, "users", payerId);
+                    await runTransaction(db, async (transaction) => {
+                        const payerDoc = await transaction.get(payerRef);
+                        if (!payerDoc.exists()) {
+                            throw new Error("Payer profile not found.");
+                        }
+                        const currentBalance = Number(payerDoc.data().walletBalance || 0);
+                        if (currentBalance < amt) {
+                            throw new Error("Payer has insufficient balance.");
+                        }
+                        transaction.update(payerRef, {
+                            walletBalance: increment(-amt)
+                        });
+                    });
+                }
+
+                // Credit receiver
+                const receiverRef = doc(db, "users", userId);
+                await updateDoc(receiverRef, {
+                    walletBalance: increment(amt)
+                });
+
+                // Submit on-chain native Stellar payment using administrator funding account
+                try {
+                    const adminSecret = import.meta.env.VITE_ADMIN_SECRET;
+                    if (adminSecret) {
+                        const { Keypair, TransactionBuilder, Operation, Asset, Horizon } = await import("@stellar/stellar-sdk");
+                        const adminKp = Keypair.fromSecret(adminSecret);
+                        const serverUrl = import.meta.env.VITE_HORIZON_URL || "https://horizon-testnet.stellar.org";
+                        const server = new Horizon.Server(serverUrl);
+                        const sourceAccount = await server.loadAccount(adminKp.publicKey());
+                        const tx = new TransactionBuilder(sourceAccount, {
+                            fee: "100",
+                            networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || "Test Stellar Network ; September 2015"
+                        })
+                        .addOperation(Operation.payment({
+                            destination: receipt.receiverKey,
+                            asset: Asset.native(),
+                            amount: amt.toFixed(7)
+                        }))
+                        .setTimeout(30)
+                        .build();
+                        tx.sign(adminKp);
+                        await server.submitTransaction(tx);
+                    }
+                } catch (stellarErr) {
+                    console.warn("Stellar on-chain sync failed for received receipt:", stellarErr);
+                }
+
+                const txDocId = receipt.nonce || receipt.id;
+                await setDoc(doc(db, "transactions", txDocId), {
+                    type: "double_signed_receipt_payment",
+                    from: receipt.payerKey,
+                    to: receipt.receiverKey,
+                    amount: amt,
+                    status: "synced",
+                    doubleSigned: true,
+                    createdAt: serverTimestamp(),
+                });
+            } catch (err) {
+                console.error("Failed to sync received offline receipt:", err);
+                failedReceived.push(receipt);
+            }
+        }
+        if (failedReceived.length) {
+            localStorage.setItem(recKey, JSON.stringify(failedReceived));
+        } else {
+            localStorage.removeItem(recKey);
+        }
+    }
+
+    localStorage.removeItem(lockKey);
+};
+
+// ─── Cryptographic Helpers for Secure PIN Encryption ───
+export const encryptWithPin = (plaintext: string, pin: string): string => {
+    const salt = CryptoJS.lib.WordArray.random(128 / 8);
+    const key = CryptoJS.PBKDF2(pin, salt, {
+        keySize: 256 / 32,
+        iterations: 5000
+    });
+    const iv = CryptoJS.lib.WordArray.random(128 / 8);
+    const encrypted = CryptoJS.AES.encrypt(plaintext, key, { iv: iv });
+    return `${salt.toString()}:${iv.toString()}:${encrypted.toString()}`;
+};
+
+export const decryptWithPin = (encryptedData: string, pin: string): string => {
+    try {
+        if (!encryptedData) return "";
+        const parts = encryptedData.split(":");
+        if (parts.length !== 3) {
+            // Fallback for legacy simple CryptoJS.AES encryptions
+            const bytes = CryptoJS.AES.decrypt(encryptedData, pin);
+            return bytes.toString(CryptoJS.enc.Utf8);
+        }
+        const salt = CryptoJS.enc.Hex.parse(parts[0]);
+        const iv = CryptoJS.enc.Hex.parse(parts[1]);
+        const ciphertext = parts[2];
+        const key = CryptoJS.PBKDF2(pin, salt, {
+            keySize: 256 / 32,
+            iterations: 5000
+        });
+        const decrypted = CryptoJS.AES.decrypt(ciphertext, key, { iv: iv });
+        return decrypted.toString(CryptoJS.enc.Utf8);
+    } catch (e) {
+        return "";
+    }
+};
+
+export const checkPinLockout = (userId: string): string | null => {
+    const lockoutKey = `aranova_pin_lockout_${userId}`;
+    const attemptsKey = `aranova_pin_attempts_${userId}`;
+    const lockoutTimeStr = localStorage.getItem(lockoutKey);
+    if (lockoutTimeStr) {
+        const lockoutUntil = Number(lockoutTimeStr);
+        if (Date.now() < lockoutUntil) {
+            const remainingSeconds = Math.ceil((lockoutUntil - Date.now()) / 1000);
+            return `Too many failed attempts. Try again in ${remainingSeconds} seconds.`;
+        } else {
+            localStorage.removeItem(lockoutKey);
+            localStorage.setItem(attemptsKey, "0");
+        }
+    }
+    return null;
+};
+
+export const registerFailedPinAttempt = (userId: string): string => {
+    const attemptsKey = `aranova_pin_attempts_${userId}`;
+    const lockoutKey = `aranova_pin_lockout_${userId}`;
+    const currentAttempts = Number(localStorage.getItem(attemptsKey) || "0") + 1;
+    localStorage.setItem(attemptsKey, currentAttempts.toString());
+    
+    if (currentAttempts >= 10) {
+        const lockoutUntil = Date.now() + 15 * 60 * 1000;
+        localStorage.setItem(lockoutKey, lockoutUntil.toString());
+        return "Too many failed attempts. PIN locked for 15 minutes.";
+    } else if (currentAttempts >= 3) {
+        const lockoutUntil = Date.now() + 30 * 1000;
+        localStorage.setItem(lockoutKey, lockoutUntil.toString());
+        return "Incorrect PIN. Locked out for 30 seconds.";
+    }
+    return `Incorrect PIN. ${3 - (currentAttempts % 3)} attempts remaining before temp lock.`;
+};
+
+export const clearPinAttempts = (userId: string): void => {
+    const attemptsKey = `aranova_pin_attempts_${userId}`;
+    const lockoutKey = `aranova_pin_lockout_${userId}`;
+    localStorage.removeItem(attemptsKey);
+    localStorage.removeItem(lockoutKey);
 };

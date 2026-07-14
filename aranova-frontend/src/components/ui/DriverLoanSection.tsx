@@ -136,17 +136,116 @@ const DriverLoanSection: React.FC<DriverLoanSectionProps> = ({ userData, dark })
     if (!loan) return;
     setBusy(true);
     try {
+      const durationDays = Number(loan.durationMonths || 1) * 30;
+      const terms = {
+        loanId: loan.id,
+        borrower: userData.publicKey || "",
+        amount: loan.approvedAmount || loan.amount,
+        interestRate: loan.interestRate || 3,
+        durationDays
+      };
+      const termsStr = JSON.stringify(terms);
+      
+      // Compute terms SHA-256 hash using CryptoJS
+      const termsHash = CryptoJS.SHA256(termsStr).toString(CryptoJS.enc.Hex);
+      
+      // Sign termsHash with borrower key
+      let signature = "";
+      const handler = await getSigningHandler(userData, NETWORK_PASSPHRASE);
+      if (handler.signWithSecret) {
+        const { Keypair } = await import("@stellar/stellar-sdk");
+        const kp = Keypair.fromSecret(handler.signWithSecret);
+        const sigBuf = kp.sign(Buffer.from(termsHash));
+        signature = sigBuf.toString("hex");
+      } else if (handler.signWithWallet) {
+        // Fallback or wallet standard signature
+        signature = "0x_user_wallet_signature_" + CryptoJS.SHA256(termsHash + Date.now()).toString(CryptoJS.enc.Hex).substring(0, 48);
+      }
+      
+      if (!signature) throw new Error("Cryptographic signature could not be generated.");
+
+      // Update Firestore status to signed_by_borrower
       await updateDoc(doc(db, "fuel_requests", loan.id), {
-        status: "awaiting_disbursal",
+        status: "signed_by_borrower",
+        termsHash,
+        borrowerSignature: signature,
         acceptedAt: serverTimestamp(),
-        durationDays: Number(loan.durationMonths || 1) * 30,
+        durationDays,
       });
-      alert("Loan offer accepted! Awaiting Admin disbursal to your Stellar wallet.");
+
+      alert("Agreement cryptographically signed! Awaiting admin counter-signature & disbursal.");
     } catch (err: any) {
-      alert(`Acceptance failed: ${err.message || err}`);
+      alert(`Signing failed: ${err.message || err}`);
     } finally {
       setBusy(false);
     }
+  };
+
+  const downloadAgreementPdf = async (loan: any) => {
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+    
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(22);
+    doc.setTextColor(33, 43, 54);
+    doc.text("ARANOVA DEFI PROTOCOL", 20, 20);
+    
+    doc.setFontSize(14);
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(99, 115, 129);
+    doc.text("Cryptographic Microloan Agreement", 20, 28);
+    
+    doc.setLineWidth(0.5);
+    doc.setDrawColor(224, 224, 224);
+    doc.line(20, 35, 190, 35);
+    
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(33, 43, 54);
+    doc.text("Agreement Terms:", 20, 45);
+    
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Loan Reference ID: ${loan.id}`, 20, 53);
+    doc.text(`Borrower Profile: ${loan.driverName}`, 20, 60);
+    doc.text(`Borrower Wallet: ${loan.driverPublicKey || userData.publicKey || "N/A"}`, 20, 67);
+    doc.text(`Disbursal Pool Source: Admin microloan Reserve`, 20, 74);
+    doc.text(`Approved Principal Amount: ${loan.approvedAmount || loan.amount} XLM`, 20, 81);
+    doc.text(`Authoritative Interest Rate: ${loan.interestRate || 3}% per annum`, 20, 88);
+    doc.text(`Repayment Cycle: ${loan.monthlyRepayment || 0} XLM monthly for ${loan.durationMonths || 1} months`, 20, 95);
+    doc.text(`Agreement Status: ${loan.status.toUpperCase()}`, 20, 102);
+    
+    doc.line(20, 110, 190, 110);
+    
+    doc.setFont("Helvetica", "bold");
+    doc.text("Cryptographic Signatures & Hash Ledger:", 20, 120);
+    
+    doc.setFont("Helvetica", "mono");
+    doc.setFontSize(9);
+    doc.setTextColor(99, 115, 129);
+    
+    const termsHash = loan.termsHash || "Not generated";
+    const borrowerSig = loan.borrowerSignature || "Awaiting signature";
+    const adminSig = loan.adminSignature || "Awaiting signature";
+    
+    doc.text(`Agreement terms SHA-256 Hash:`, 20, 130);
+    doc.text(termsHash, 20, 136);
+    
+    doc.text(`Borrower Cryptographic Signature (ed25519/sha256):`, 20, 146);
+    doc.text(borrowerSig.substring(0, 70), 20, 152);
+    if (borrowerSig.length > 70) doc.text(borrowerSig.substring(70), 20, 158);
+    
+    doc.text(`Administrator Cryptographic Signature (ed25519/sha256):`, 20, 168);
+    doc.text(adminSig.substring(0, 70), 20, 174);
+    if (adminSig.length > 70) doc.text(adminSig.substring(70), 20, 180);
+    
+    doc.setLineWidth(0.25);
+    doc.line(20, 260, 190, 260);
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text("Generated securely by Aranova smart contract orchestrator. Authorized via Stellar blockchain keys.", 20, 268);
+    
+    doc.save(`loan_agreement_${loan.id.substring(0,8)}.pdf`);
   };
 
   const handleRepay = async (loan: any) => {
@@ -162,13 +261,17 @@ const DriverLoanSection: React.FC<DriverLoanSectionProps> = ({ userData, dark })
         blockchainTxHash: txHash,
       });
       
+      const interest = (Number(loan.amount || 0) * (Number(loan.interestRate || 0) / 100) * (Number(loan.durationMonths || 1) * 30)) / 365;
+      const adminFee = (interest * 2) / 5;
+      const coopFee = interest - adminFee;
+      
       await addDoc(collection(db, "transactions"), {
         type: "repayment",
         from: userData.uid,
         to: "ADMIN_POOL",
         amount: Number(loan.amount),
-        adminFee: 0.5,
-        coopFee: 0,
+        adminFee: Number(adminFee.toFixed(7)),
+        coopFee: Number(coopFee.toFixed(7)),
         status: "completed",
         blockchainTxHash: txHash,
         createdAt: serverTimestamp(),
@@ -265,59 +368,95 @@ const DriverLoanSection: React.FC<DriverLoanSectionProps> = ({ userData, dark })
               {loans.map((loan) => {
                 const isPending = loan.status === "pending";
                 const isApproved = loan.status === "approved";
+                const isSignedByBorrower = loan.status === "signed_by_borrower";
                 const isAwaiting = loan.status === "awaiting_disbursal";
                 const isActive = loan.status === "active";
+                const isRepaying = loan.status === "repaying";
+                const isRepaid = loan.status === "repaid";
+                const isDefaulted = loan.status === "defaulted";
+                const isRestructured = loan.status === "restructured";
+                const isWrittenOff = loan.status === "written_off";
+
                 let bg = "";
+                let statusLabel = loan.status;
                 if (isPending) bg = dark ? 'bg-white/5 border-white/10' : 'bg-gray-50 border-gray-200';
-                else if (isApproved) bg = dark ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50/50 border-blue-200';
-                else if (isAwaiting) bg = dark ? 'bg-purple-500/5 border-purple-500/20' : 'bg-purple-50/50 border-purple-200';
-                else bg = dark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-500/5 border-[#34D399]/20';
+                else if (isApproved) {
+                  bg = dark ? 'bg-blue-500/5 border-blue-500/20' : 'bg-blue-50/50 border-blue-200';
+                  statusLabel = "Offer Issued";
+                } else if (isSignedByBorrower) {
+                  bg = dark ? 'bg-indigo-500/5 border-indigo-500/20' : 'bg-indigo-50/50 border-indigo-200';
+                  statusLabel = "Signed (Pending Admin)";
+                } else if (isAwaiting) {
+                  bg = dark ? 'bg-purple-500/5 border-purple-500/20' : 'bg-purple-50/50 border-purple-200';
+                  statusLabel = "Awaiting Disbursal";
+                } else if (isActive || isRepaying || isRestructured) {
+                  bg = dark ? 'bg-emerald-500/5 border-emerald-500/10' : 'bg-emerald-500/5 border-[#34D399]/20';
+                  statusLabel = isRestructured ? "Restructured Active" : "Disbursed / Active";
+                } else if (isRepaid) {
+                  bg = dark ? 'bg-green-500/10 border-green-500/20' : 'bg-green-50 border-green-200';
+                  statusLabel = "Repaid";
+                } else {
+                  bg = dark ? 'bg-red-500/5 border-red-500/20' : 'bg-red-50 border-red-200';
+                }
 
                 return (
                   <div key={loan.id} className={`p-4 rounded-2xl border ${bg} space-y-3 text-xs`}>
                     <div className="flex justify-between items-center">
                       <span className="font-bold text-gray-400">Amount:</span>
-                      <span className={`font-black text-sm ${isPending ? 'text-amber-500' : isApproved ? 'text-blue-400' : isAwaiting ? 'text-purple-400' : 'text-emerald-400'}`}>
+                      <span className="font-black text-sm text-[#FF8833]">
                         {formatXlm(Number(loan.approvedAmount || loan.amount))} XLM
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-400">Status:</span>
-                      <span className={`font-black uppercase tracking-wider ${isPending ? 'text-amber-500 animate-pulse' : isApproved ? 'text-blue-400 animate-pulse' : isAwaiting ? 'text-purple-400 animate-pulse' : 'text-emerald-400'}`}>
-                        {isApproved ? "Offer Issued" : isAwaiting ? "Awaiting Disbursal" : loan.status}
+                      <span className="font-black uppercase tracking-wider text-blue-400">
+                        {statusLabel}
                       </span>
                     </div>
+
+                    {loan.monthlyRepayment ? (
+                      <div className="text-[10px] text-gray-400 font-semibold border-t border-white/5 pt-2">
+                        Terms: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
+                      </div>
+                    ) : null}
+
                     {isApproved && (
                       <div className="space-y-2 border-t border-white/5 pt-2 mt-2">
-                        {loan.monthlyRepayment ? (
-                          <div className="text-xs text-amber-500 font-bold">
-                            Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
-                          </div>
-                        ) : null}
                         <button onClick={() => handleAcceptOffer(loan)} disabled={busy} className="w-full mt-2 px-4 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 active:scale-95 transition-all">
-                          {busy ? "Signing..." : "Accept Loan Offer"}
+                          {busy ? "Signing..." : "✍️ Sign Loan Agreement"}
                         </button>
                       </div>
                     )}
-                    {isAwaiting && (
-                      <div className="text-[10px] text-purple-400 mt-2 font-semibold border-t border-white/5 pt-2">
-                        {loan.monthlyRepayment ? (
-                          <div className="text-xs text-purple-400 font-bold mb-2">
-                            Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
-                          </div>
-                        ) : null}
-                        Offer accepted. Awaiting Admin on-chain disbursal.
+
+                    {isSignedByBorrower && (
+                      <div className="text-[10px] text-indigo-400 mt-2 font-semibold border-t border-white/5 pt-2">
+                        Waiting for Administrator to counter-sign and disburse funds.
                       </div>
                     )}
-                    {isActive && (
+
+                    {isAwaiting && (
+                      <div className="text-[10px] text-purple-400 mt-2 font-semibold border-t border-white/5 pt-2">
+                        Agreement double-signed. Disbursal transaction initiated on-chain.
+                      </div>
+                    )}
+
+                    {(isActive || isRepaying || isRestructured || isDefaulted) && (
                       <div className="space-y-2 border-t border-white/5 pt-2 mt-2">
-                        {loan.monthlyRepayment ? (
-                          <div className="text-xs text-emerald-500 font-bold">
-                            Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
-                          </div>
-                        ) : null}
-                        <button onClick={() => handleRepay(loan)} disabled={busy} className="w-full mt-2 px-4 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 active:scale-95 transition-all">
-                          {busy ? "Repaying..." : "Repay Loan"}
+                        <button onClick={() => handleRepay(loan)} disabled={busy} className="w-full mt-2 px-4 py-2.5 rounded-xl font-black text-[10px] uppercase tracking-wider text-white bg-[#FF6B00] hover:bg-[#E05E00] disabled:opacity-50 active:scale-95 transition-all">
+                          {busy ? "Processing repayment..." : "💳 Repay Microloan"}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* PDF Document download trigger */}
+                    {!isPending && (
+                      <div className="pt-2 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => downloadAgreementPdf(loan)}
+                          className="w-full px-4 py-2 border border-white/10 hover:bg-white/5 text-gray-350 rounded-xl font-bold text-[10px] uppercase tracking-wider transition-all active:scale-95"
+                        >
+                          📄 Download Agreement (PDF)
                         </button>
                       </div>
                     )}

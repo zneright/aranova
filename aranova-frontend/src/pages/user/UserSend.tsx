@@ -113,14 +113,21 @@ const UserSend: React.FC = () => {
   const handleSend = async () => {
     const value = Number(amount);
     if (!recipient || !value) return alert("Enter a recipient and amount.");
-    if (value > Number(userData.walletBalance || 0)) return alert("Insufficient wallet balance.");
+
+    const pendingKey = `aranova_pending_offline_deductions_${userData.uid}`;
+    const pendingDeductions = Number(localStorage.getItem(pendingKey) || "0");
+    const availableBalance = Number(userData.walletBalance || 0) - pendingDeductions;
+
+    if (value > availableBalance) {
+      return alert(`Insufficient wallet balance. Available: ${availableBalance.toFixed(2)} XLM (accounting for pending offline payments).`);
+    }
 
     if (!navigator.onLine) {
       setPinPurpose(`Sign Offline Pay of ${value.toFixed(2)} XLM`);
       setPinDigits("");
       setPinError("");
       setPinCallback(() => async (secret: string) => {
-        const nonce = Math.random().toString(36).substring(7);
+        const nonce = crypto.randomUUID().replace(/-/g, "");
         const timestamp = Date.now();
         const message = `${userData.uid}:${recipient}:${value}:${nonce}:${timestamp}`;
         let signature = "";
@@ -148,12 +155,10 @@ const UserSend: React.FC = () => {
           signature,
         };
 
-        const key = `aranova_offline_queue_${userData.uid}`;
-        const queued = JSON.parse(localStorage.getItem(key) || "[]");
-        queued.push(payloadObj);
-        localStorage.setItem(key, JSON.stringify(queued));
+        // Track pending offline deduction
+        localStorage.setItem(pendingKey, (pendingDeductions + value).toString());
 
-        queueBluetoothPayment(userData.uid, { recipient, amount: value, mode: "bluetooth" });
+        queueBluetoothPayment(userData.uid, payloadObj);
         
         // Broadcast over simulated Bluetooth proximity channel
         try {

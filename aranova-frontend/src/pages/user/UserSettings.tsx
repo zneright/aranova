@@ -1,12 +1,15 @@
 import { useState } from "react";
 import { doc, updateDoc } from "firebase/firestore";
-import CryptoJS from "crypto-js";
 import { Keypair } from "@stellar/stellar-sdk";
 import { db, auth } from "../../firebase/config";
 import { useAuth } from "../../contexts/AuthContext";
 import UserLayout from "../../components/layout/UserLayout";
 import { useTheme } from "../../contexts/ThemeContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
+import { encryptWithPin, decryptWithPin, checkPinLockout, registerFailedPinAttempt, clearPinAttempts } from "../../services/aranovaWorkflow";
+import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
+import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
+import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 
 const UserSettings = () => {
   const { dark } = useTheme();
@@ -34,6 +37,47 @@ const UserSettings = () => {
   const [pinStep, setPinStep] = useState<"idle" | "reveal" | "change_old" | "change_new" | "change_confirm" | "import_new" | "import_confirm">("idle");
   const [oldPinVal, setOldPinVal] = useState("");
   const [newPinVal, setNewPinVal] = useState("");
+  const [connectingWallet, setConnectingWallet] = useState(false);
+  const [walletError, setWalletError] = useState("");
+
+  const connectUserWallet = async (walletId: string) => {
+    setConnectingWallet(true);
+    setWalletError("");
+    try {
+      let walletModule: any;
+      if (walletId === 'freighter') walletModule = new FreighterModule();
+      else if (walletId === 'xbull') walletModule = new xBullModule();
+      else if (walletId === 'lobstr') walletModule = new LobstrModule();
+
+      if (!walletModule) throw new Error("Wallet standard module failed to load.");
+
+      let isAvailable = false;
+      try {
+        isAvailable = await walletModule.isAvailable();
+      } catch (err) {
+        isAvailable = false;
+      }
+      if (!isAvailable) {
+        throw new Error(`${walletId.toUpperCase()} extension is not installed.`);
+      }
+
+      const response = await walletModule.getAddress();
+      const address = response.address;
+      if (!address) throw new Error("Wallet did not return a public address.");
+
+      if (auth.currentUser) {
+        await updateDoc(doc(db, "users", auth.currentUser.uid), {
+          publicKey: address,
+          walletType: walletId
+        });
+      }
+      alert(`Successfully connected ${walletId.toUpperCase()} wallet: ${address}`);
+    } catch (err: any) {
+      setWalletError(err.message || "Failed to connect wallet.");
+    } finally {
+      setConnectingWallet(false);
+    }
+  };
 
   const handleNav = (key: string) => {
     const routes: Record<string, string> = { wallet: "/user", vault: "/user/vault", activity: "/user/activity", settings: "/user/settings" };
@@ -92,31 +136,43 @@ const UserSettings = () => {
       return;
     }
     setPinError("");
+
+    if (!userData?.uid) return;
+
+    // Check lockout first
+    const lockoutMsg = checkPinLockout(userData.uid);
+    if (lockoutMsg) {
+      setPinError(lockoutMsg);
+      return;
+    }
+
     const entered = pinDigits;
     setPinDigits("");
 
     if (pinStep === "reveal") {
       try {
-        const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, entered);
-        const originalText = bytes.toString(CryptoJS.enc.Utf8);
-        if (!originalText || !originalText.startsWith("S")) throw new Error("Invalid PIN");
+        const originalText = decryptWithPin(userData.encryptedSecretKey, entered);
+        if (!originalText || !originalText.startsWith("S") || originalText.length !== 56) throw new Error("Invalid PIN");
+        clearPinAttempts(userData.uid);
         setDecryptedPhrase(originalText);
         setShowPhrase(true);
         setShowPinModal(false);
         setPinStep("idle");
       } catch (e) {
-        setPinError("Incorrect PIN. Decryption failed.");
+        const msg = registerFailedPinAttempt(userData.uid);
+        setPinError("Incorrect PIN: " + msg);
       }
     } else if (pinStep === "change_old") {
       try {
-        const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, entered);
-        const secretKey = bytes.toString(CryptoJS.enc.Utf8);
-        if (!secretKey || !secretKey.startsWith("S")) throw new Error("Invalid PIN");
+        const secretKey = decryptWithPin(userData.encryptedSecretKey, entered);
+        if (!secretKey || !secretKey.startsWith("S") || secretKey.length !== 56) throw new Error("Invalid PIN");
+        clearPinAttempts(userData.uid);
         setOldPinVal(entered);
         setPinStep("change_new");
         setPinPurpose("Enter New 4-Digit PIN");
       } catch (e) {
-        setPinError("Incorrect current PIN.");
+        const msg = registerFailedPinAttempt(userData.uid);
+        setPinError("Incorrect current PIN: " + msg);
       }
     } else if (pinStep === "change_new") {
       setNewPinVal(entered);
@@ -128,9 +184,9 @@ const UserSettings = () => {
         return;
       }
       try {
-        const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, oldPinVal);
-        const secretKey = bytes.toString(CryptoJS.enc.Utf8);
-        const encryptedSecret = CryptoJS.AES.encrypt(secretKey, entered).toString();
+        const secretKey = decryptWithPin(userData.encryptedSecretKey, oldPinVal);
+        if (!secretKey || !secretKey.startsWith("S") || secretKey.length !== 56) throw new Error("Decryption failed");
+        const encryptedSecret = encryptWithPin(secretKey, entered);
         await updateDoc(doc(db, "users", auth.currentUser!.uid), {
           encryptedSecretKey: encryptedSecret
         });
@@ -153,7 +209,7 @@ const UserSettings = () => {
       try {
         const pair = Keypair.fromSecret(importKey.trim());
         const publicKey = pair.publicKey();
-        const encryptedSecret = CryptoJS.AES.encrypt(pair.secret(), entered).toString();
+        const encryptedSecret = encryptWithPin(pair.secret(), entered);
 
         await updateDoc(doc(db, "users", auth.currentUser!.uid), {
           publicKey: publicKey,
@@ -464,31 +520,69 @@ const UserSettings = () => {
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-6 animate-fadeIn">
+            {/* Wallet Extension Connector Section */}
             <div>
-              <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Import Raw Secret Key</p>
-              <p className={`text-xs mt-1 leading-relaxed ${textMuted}`}>Enable offline signing capability by importing your Stellar Secret Key. The key remains locally encrypted with a PIN.</p>
+              <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Connect Web3 Stellar Wallet</p>
+              <p className={`text-xs mt-1 leading-relaxed ${textMuted} mb-4`}>
+                Link your Freighter, xBull, or Lobstr browser extension wallet using standard connection protocols.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <button
+                  type="button"
+                  onClick={() => connectUserWallet("freighter")}
+                  disabled={connectingWallet}
+                  className="py-3 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
+                >
+                  Freighter
+                </button>
+                <button
+                  type="button"
+                  onClick={() => connectUserWallet("xbull")}
+                  disabled={connectingWallet}
+                  className="py-3 bg-purple-600/10 hover:bg-purple-600/20 text-purple-500 border border-purple-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
+                >
+                  xBull
+                </button>
+                <button
+                  type="button"
+                  onClick={() => connectUserWallet("lobstr")}
+                  disabled={connectingWallet}
+                  className="py-3 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-500 border border-emerald-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
+                >
+                  Lobstr
+                </button>
+              </div>
+              {walletError && <p className="text-red-500 text-xs font-bold mt-2">{walletError}</p>}
             </div>
 
-            <input
-              type="password"
-              placeholder="Paste raw Secret Key (S...)"
-              value={importKey}
-              onChange={(e) => setImportKey(e.target.value)}
-              className={`w-full px-4 py-3 rounded-xl border text-xs focus:outline-none focus:ring-1 ${theme.inputRing} ${
-                dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-600' : 'bg-gray-50 border-gray-200 text-gray-900'
-              }`}
-            />
+            <div className={`border-t border-dashed pt-6 ${dark ? 'border-white/5' : 'border-gray-200'}`}>
+              <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Import Raw Secret Key (Offline Fallback)</p>
+              <p className={`text-xs mt-1 leading-relaxed ${textMuted} mb-4`}>
+                Enable offline signing capability by importing your Stellar Secret Key. The key remains locally encrypted with a PIN.
+              </p>
 
-            {importError && <p className="text-red-500 text-xs font-bold">{importError}</p>}
+              <input
+                type="password"
+                placeholder="Paste raw Secret Key (S...)"
+                value={importKey}
+                onChange={(e) => setImportKey(e.target.value)}
+                className={`w-full px-4 py-3 rounded-xl border text-xs focus:outline-none focus:ring-1 ${theme.inputRing} ${
+                  dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-600' : 'bg-gray-50 border-gray-200 text-gray-900'
+                } mb-3`}
+              />
 
-            <button
-              onClick={triggerImportSecretKey}
-              disabled={isImporting || !importKey}
-              className={`w-full py-3.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 active:scale-95 ${theme.accentBg}`}
-            >
-              {isImporting ? "Encrypting..." : "Setup Encrypted Import"}
-            </button>
+              {importError && <p className="text-red-500 text-xs font-bold mb-3">{importError}</p>}
+
+              <button
+                type="button"
+                onClick={triggerImportSecretKey}
+                disabled={isImporting || !importKey}
+                className={`w-full py-3.5 rounded-xl font-black text-xs uppercase tracking-wider transition-all disabled:opacity-50 active:scale-95 ${theme.accentBg}`}
+              >
+                {isImporting ? "Encrypting..." : "Setup Encrypted Import"}
+              </button>
+            </div>
           </div>
         )}
       </div>

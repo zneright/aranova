@@ -16,8 +16,7 @@ import {
   onSnapshot,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
-import { scoreDeltaForVault, dayMs, formatXlm, recalculateAndSyncTrustScore } from "../../services/aranovaWorkflow";
-import CryptoJS from "crypto-js";
+import { scoreDeltaForVault, dayMs, formatXlm, recalculateAndSyncTrustScore, encryptWithPin, decryptWithPin, checkPinLockout, registerFailedPinAttempt, clearPinAttempts } from "../../services/aranovaWorkflow";
 import { Keypair } from "@stellar/stellar-sdk";
 import { lockVaultOnChain, redeemVaultOnChain, getVaultBalanceOnChain } from "../../services/sorobanService";
 
@@ -377,23 +376,43 @@ const UserVault = () => {
       return;
     }
     setPinError("");
+
+    if (!userData?.uid) return;
+    
+    // Check lockout first
+    const lockoutMsg = checkPinLockout(userData.uid);
+    if (lockoutMsg) {
+      setPinError(lockoutMsg);
+      return;
+    }
+
     const entered = pinDigits;
     setPinDigits("");
 
     if (pinStep === "action") {
-      setShowPinModal(false);
-      setPinStep("idle");
-      if (pinCallback) {
-        pinCallback(entered);
+      try {
+        const secret = decryptWithPin(userData.encryptedSecretKey, entered);
+        if (!secret || !secret.startsWith("S") || secret.length !== 56) {
+          throw new Error("Invalid PIN.");
+        }
+        clearPinAttempts(userData.uid);
+        setShowPinModal(false);
+        setPinStep("idle");
+        if (pinCallback) {
+          pinCallback(secret);
+        }
+      } catch (err) {
+        const msg = registerFailedPinAttempt(userData.uid);
+        setPinError(msg);
       }
     } else if (pinStep === "confirm_existing") {
       setBusy(true);
       try {
-        const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, entered);
-        const secret = bytes.toString(CryptoJS.enc.Utf8);
-        if (!secret || !secret.startsWith("S")) {
+        const secret = decryptWithPin(userData.encryptedSecretKey, entered);
+        if (!secret || !secret.startsWith("S") || secret.length !== 56) {
           throw new Error("Invalid PIN.");
         }
+        clearPinAttempts(userData.uid);
         await updateDoc(doc(db, "users", userData.uid), {
           vaultTermsAgreed: true,
         });
@@ -402,7 +421,8 @@ const UserVault = () => {
         setPinStep("idle");
         alert("Vault activated successfully!");
       } catch (err: any) {
-        setPinError("Activation failed: Incorrect PIN.");
+        const msg = registerFailedPinAttempt(userData.uid);
+        setPinError("Activation failed: " + msg);
       } finally {
         setBusy(false);
       }
@@ -419,7 +439,7 @@ const UserVault = () => {
       try {
         const pair = Keypair.random();
         const publicKey = pair.publicKey();
-        const encryptedSecret = CryptoJS.AES.encrypt(pair.secret(), entered).toString();
+        const encryptedSecret = encryptWithPin(pair.secret(), entered);
 
         await updateDoc(doc(db, "users", userData.uid), {
           publicKey: publicKey,
@@ -469,16 +489,24 @@ const UserVault = () => {
 
   // Page level PIN verification handlers
   const handleUnlockSubmit = (pin: string) => {
+    if (!userData?.uid) return;
+    const lockoutMsg = checkPinLockout(userData.uid);
+    if (lockoutMsg) {
+      setUnlockError(lockoutMsg);
+      return;
+    }
+
     try {
-      const bytes = CryptoJS.AES.decrypt(userData.encryptedSecretKey, pin);
-      const secret = bytes.toString(CryptoJS.enc.Utf8);
-      if (!secret || !secret.startsWith("S")) {
+      const secret = decryptWithPin(userData.encryptedSecretKey, pin);
+      if (!secret || !secret.startsWith("S") || secret.length !== 56) {
           throw new Error("Invalid PIN.");
       }
+      clearPinAttempts(userData.uid);
       setUnlockError("");
       setIsUnlocked(true);
     } catch (err) {
-      setUnlockError("Access Denied: Incorrect Security PIN.");
+      const msg = registerFailedPinAttempt(userData.uid);
+      setUnlockError("Access Denied: " + msg);
       setUnlockDigits("");
     }
   };

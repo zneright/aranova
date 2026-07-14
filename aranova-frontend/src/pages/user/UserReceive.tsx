@@ -6,6 +6,15 @@ import UserLayout from "../../components/layout/UserLayout";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import QRCode from "qrcode";
 import { Html5Qrcode } from "html5-qrcode";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  increment,
+  runTransaction,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "../../firebase/config";
 
 const OfflineQrCanvas: React.FC<{ text: string; size?: number }> = ({ text, size = 250 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -72,28 +81,124 @@ const UserReceive: React.FC = () => {
           async (decodedText) => {
             try {
               const receipt = JSON.parse(decodedText);
-              if (receipt.type !== "offline_pay" || !receipt.payerId || !receipt.amount || !receipt.signature) {
+              if (receipt.type !== "offline_pay" || !receipt.payerId || !receipt.amount || !receipt.signature || !receipt.payerKey) {
                 throw new Error("Invalid receipt QR format.");
               }
               
-              const key = `aranova_received_offline_${userData.uid}`;
-              const received = JSON.parse(localStorage.getItem(key) || "[]");
-              
-              if (received.some((r: any) => r.nonce === receipt.nonce)) {
-                alert("This offline receipt has already been scanned!");
-                scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
-                return;
+              // ─── CRYPTOGRAPHIC SIGNATURE VERIFICATION ───
+              const message = `${receipt.payerId}:${receipt.recipient}:${receipt.amount}:${receipt.nonce}:${receipt.timestamp}`;
+              const { Keypair } = await import("@stellar/stellar-sdk");
+              const isValid = Keypair.fromPublicKey(receipt.payerKey).verify(
+                Buffer.from(message),
+                Buffer.from(receipt.signature, "hex")
+              );
+              if (!isValid) {
+                throw new Error("Payer signature is cryptographically invalid.");
               }
 
-              received.push(receipt);
-              localStorage.setItem(key, JSON.stringify(received));
+              // Local duplicate check
+              const localKey = `aranova_received_offline_${userData.uid}`;
+              const received = JSON.parse(localStorage.getItem(localKey) || "[]");
+              if (received.some((r: any) => r.nonce === receipt.nonce)) {
+                throw new Error("This receipt nonce was already scanned on this device.");
+              }
+
+              if (navigator.onLine) {
+                // Process settlement immediately online
+                const txDocId = receipt.nonce;
+                const recSnap = await getDoc(doc(db, "users", userData.uid));
+                let vaultPct = 0;
+                let preferredDays = 30;
+                if (recSnap.exists()) {
+                  vaultPct = recSnap.data().vaultRoutingPct || 0;
+                  preferredDays = recSnap.data().vaultPreferredDays || 30;
+                }
+
+                const vault_portion = (receipt.amount * vaultPct) / 100;
+                const wallet_portion = receipt.amount - vault_portion;
+
+                await runTransaction(db, async (transaction) => {
+                  const paymentRef = doc(db, "offline_payments", txDocId);
+                  const paymentDoc = await transaction.get(paymentRef);
+                  if (paymentDoc.exists()) {
+                    throw new Error("This offline payment nonce has already been processed on the server.");
+                  }
+
+                  const payerRef = doc(db, "users", receipt.payerId);
+                  const payerDoc = await transaction.get(payerRef);
+                  if (!payerDoc.exists()) {
+                    throw new Error("Payer profile not found on the server.");
+                  }
+                  const currentPayerBalance = Number(payerDoc.data().walletBalance || 0);
+                  if (currentPayerBalance < receipt.amount) {
+                    throw new Error("Payer has insufficient balance on server.");
+                  }
+
+                  // Write payment log record
+                  transaction.set(paymentRef, {
+                    payerId: receipt.payerId,
+                    payerKey: receipt.payerKey,
+                    recipientId: userData.uid,
+                    amount: receipt.amount,
+                    nonce: receipt.nonce,
+                    channel: "offline_qr",
+                    status: "synced",
+                    createdAt: serverTimestamp(),
+                  });
+
+                  // Decrement payer balance
+                  transaction.update(payerRef, {
+                    walletBalance: increment(-receipt.amount)
+                  });
+
+                  // Credit recipient (driver) balance & vault
+                  const recipientRef = doc(db, "users", userData.uid);
+                  transaction.update(recipientRef, {
+                    walletBalance: increment(wallet_portion),
+                    vaultBalance: increment(vault_portion),
+                  });
+                });
+
+                // Write vault lock record
+                if (vault_portion > 0) {
+                  const calculatedMaturityDate = new Date(Date.now() + preferredDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+                  const vaultId = `${userData.uid}_vault_offline_${txDocId}`;
+                  await setDoc(doc(db, "vaults", vaultId), {
+                    ownerId: userData.uid,
+                    lockedAmount: vault_portion,
+                    lockPercent: vaultPct,
+                    lockDays: preferredDays,
+                    maturityDate: calculatedMaturityDate,
+                    status: "locked",
+                    createdAt: serverTimestamp(),
+                    isOfflineRouted: true,
+                  });
+                }
+
+                // Write final transaction ledger record
+                await setDoc(doc(db, "transactions", `tx_${txDocId}`), {
+                  type: "offline_qr_settled",
+                  from: receipt.payerId,
+                  to: userData.uid,
+                  amount: receipt.amount,
+                  status: "completed",
+                  createdAt: serverTimestamp(),
+                });
+
+                alert("Receipt scanned and settled successfully online!");
+              } else {
+                // Store in local queue for later syncing when online
+                received.push(receipt);
+                localStorage.setItem(localKey, JSON.stringify(received));
+                alert("Scan successful! Stored offline in queue to sync when internet is restored.");
+              }
 
               setReceiptData(receipt);
               setShowReceiptModal(true);
               scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
             } catch (err: any) {
-              console.error("QR decode failed:", err);
-              alert("Error decoding receipt: " + (err.message || err));
+              console.error("Scanned payment processing failed:", err);
+              alert("Error: " + (err.message || err));
               scanner?.stop().then(() => setScanningReceipt(false)).catch(() => undefined);
             }
           },

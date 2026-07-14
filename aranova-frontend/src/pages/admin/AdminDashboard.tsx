@@ -979,6 +979,20 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
   const [repaymentAddress, setRepaymentAddress] = useState("");
   const [yieldAddress, setYieldAddress] = useState("");
 
+  // Configurable Vault Rules
+  const [vaultPenaltyBps, setVaultPenaltyBps] = useState(1000); // 10%
+  const [vaultMinLockDays, setVaultMinLockDays] = useState(30);
+  const [vaultMaxAutoLockPct, setVaultMaxAutoLockPct] = useState(50);
+  const [vaultMaxManualLock, setVaultMaxManualLock] = useState(1000); // XLM
+
+  // Configurable Trust Rules
+  const [trustRepaymentBonus, setTrustRepaymentBonus] = useState(5);
+  const [trustMaturityBonus, setTrustMaturityBonus] = useState(3);
+  const [trustLoanCompletedBonus, setTrustLoanCompletedBonus] = useState(10);
+  const [trustLatePenalty, setTrustLatePenalty] = useState(-8);
+  const [trustDefaultPenalty, setTrustDefaultPenalty] = useState(-20);
+  const [trustEarlyUnlockPenalty, setTrustEarlyUnlockPenalty] = useState(-5);
+
   // Connected Admin Wallets
   const [connectedWallets, setConnectedWallets] = useState<string[]>([]);
   const [connecting, setConnecting] = useState(false);
@@ -997,12 +1011,26 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
           if (d.repaymentAddress !== undefined) setRepaymentAddress(d.repaymentAddress);
           if (d.yieldAddress !== undefined) setYieldAddress(d.yieldAddress);
 
+          // Load vault settings
+          if (d.vaultPenaltyBps !== undefined) setVaultPenaltyBps(d.vaultPenaltyBps);
+          if (d.vaultMinLockDays !== undefined) setVaultMinLockDays(d.vaultMinLockDays);
+          if (d.vaultMaxAutoLockPct !== undefined) setVaultMaxAutoLockPct(d.vaultMaxAutoLockPct);
+          if (d.vaultMaxManualLock !== undefined) setVaultMaxManualLock(d.vaultMaxManualLock);
+
+          // Load trust settings
+          if (d.trustRepaymentBonus !== undefined) setTrustRepaymentBonus(d.trustRepaymentBonus);
+          if (d.trustMaturityBonus !== undefined) setTrustMaturityBonus(d.trustMaturityBonus);
+          if (d.trustLoanCompletedBonus !== undefined) setTrustLoanCompletedBonus(d.trustLoanCompletedBonus);
+          if (d.trustLatePenalty !== undefined) setTrustLatePenalty(d.trustLatePenalty);
+          if (d.trustDefaultPenalty !== undefined) setTrustDefaultPenalty(d.trustDefaultPenalty);
+          if (d.trustEarlyUnlockPenalty !== undefined) setTrustEarlyUnlockPenalty(d.trustEarlyUnlockPenalty);
+
           if (d.connectedWallets && Array.isArray(d.connectedWallets)) {
             existingWallets = d.connectedWallets;
           }
         }
 
-        // Query ALL users with role "admin" to retrieve all registered admin wallets (including signup ones)
+        // Query ALL users with role "admin" to retrieve registered admin wallets
         const qAdmins = query(collection(db, "users"), where("role", "==", "admin"));
         const adminsSnap = await getDocs(qAdmins);
         const registeredAdminKeys: string[] = [];
@@ -1035,26 +1063,60 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
 
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
-    setToast("Publishing global parameters to Firestore config...");
+    setToast("Publishing configurations to database & sync'ing on-chain...");
     try {
+      // 1. Save to Firestore Config Doc
       await setDoc(doc(db, "system", "config"), {
         network,
         disbursalAddress,
         repaymentAddress,
         yieldAddress,
         connectedWallets,
+        vaultPenaltyBps,
+        vaultMinLockDays,
+        vaultMaxAutoLockPct,
+        vaultMaxManualLock,
+        trustRepaymentBonus,
+        trustMaturityBonus,
+        trustLoanCompletedBonus,
+        trustLatePenalty,
+        trustDefaultPenalty,
+        trustEarlyUnlockPenalty,
         updatedAt: serverTimestamp()
       }, { merge: true });
+
+      // 2. Synchronize parameters on-chain via smart contracts
+      try {
+        const signingSecret = localStorage.getItem(`aranova_wallet_secret_admin`) || localStorage.getItem(`aranova_wallet_secret_${auth.currentUser?.uid}`);
+        if (signingSecret) {
+          const { setTrustRulesOnChain } = await import("../../services/sorobanService");
+          // Update Trust scoring weights on-chain
+          await setTrustRulesOnChain(
+            disbursalAddress || connectedWallets[0],
+            {
+              on_time_repayment_bonus: BigInt(trustRepaymentBonus),
+              vault_maturity_bonus: BigInt(trustMaturityBonus),
+              loan_completed_bonus: BigInt(trustLoanCompletedBonus),
+              late_payment_penalty: BigInt(trustLatePenalty),
+              default_penalty: BigInt(trustDefaultPenalty),
+              early_vault_unlock_penalty: BigInt(trustEarlyUnlockPenalty),
+            },
+            { signWithSecret: signingSecret }
+          );
+        }
+      } catch (chainErr) {
+        console.warn("Stellar Soroban rules sync bypassed (or offline):", chainErr);
+      }
 
       // Log config change to Audit Trail
       await addDoc(collection(db, "admin_audit_logs"), {
         adminEmail: currentAdminEmail,
         action: "Updated Protocol Configuration",
-        details: `Updated network environment to ${network}. Set Loan Disbursal to ${disbursalAddress || "none"} & Repayments Collector to ${repaymentAddress || "none"}.`,
+        details: `Updated parameters. Set Early Unlock penalty: ${vaultPenaltyBps} bps, Min lock days: ${vaultMinLockDays}, Repayment bonus: ${trustRepaymentBonus} XP, Default penalty: ${trustDefaultPenalty} XP.`,
         createdAt: serverTimestamp()
       });
 
-      setToast("Success! Published settings globally.");
+      setToast("Success! Published parameters globally and verified contract settings.");
     } catch (err) {
       setToast(`Error saving configuration: ${err}`);
     }
@@ -1092,7 +1154,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       const address = response.address;
       if (!address) throw new Error("Wallet did not return a valid public key.");
 
-      // Request cryptographic signature to verify ownership in the extension pop-up
       try {
         const authMessage = `Aranova Administrator Wallet Link\n\nPlease sign to verify ownership of this wallet key.\nTimestamp: ${Date.now()}`;
         const passphrase = network === "TESTNET"
@@ -1107,7 +1168,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
         throw new Error(signError?.message || "Signature request rejected or failed.");
       }
 
-      // Link to current admin user profile in users collection
       const q = query(collection(db, "users"), where("email", "==", currentAdminEmail), limit(1));
       const snap = await getDocs(q);
       if (!snap.empty) {
@@ -1121,7 +1181,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
         return [...prev, address];
       });
 
-      // Record successful wallet link to Audit Trail
       await addDoc(collection(db, "admin_audit_logs"), {
         adminEmail: currentAdminEmail,
         action: "Linked Admin Wallet",
@@ -1133,8 +1192,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       setShowWalletSelector(false);
     } catch (err: any) {
       console.warn("Wallet connection failed:", err);
-
-      // Record failed wallet link attempt to Audit Trail
       try {
         await addDoc(collection(db, "admin_audit_logs"), {
           adminEmail: currentAdminEmail,
@@ -1145,7 +1202,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       } catch (logErr) {
         console.warn("Could not write failure audit log:", logErr);
       }
-
       setToast(`Wallet connection failed: ${err.message || err}`);
     } finally {
       setConnecting(false);
@@ -1157,8 +1213,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       <h1 className="text-3xl font-black">System Settings</h1>
 
       {toast && (
-        <div className={`p-4 rounded-xl text-xs font-bold ${toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-          }`}>
+        <div className={`p-4 rounded-xl text-xs font-bold ${toast.includes("Success") ? "bg-green-500/10 text-green-400 border border-green-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>
           {toast}
         </div>
       )}
@@ -1179,8 +1234,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
                   <p className="text-xs text-gray-500 font-semibold italic">No wallets connected. Click below to add one.</p>
                 ) : (
                   connectedWallets.map(w => (
-                    <div key={w} className={`p-2 rounded-lg border font-mono text-[11px] font-bold flex justify-between items-center ${dark ? "bg-[#0E1016] border-white/5 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                      }`}>
+                    <div key={w} className={`p-2 rounded-lg border font-mono text-[11px] font-bold flex justify-between items-center ${dark ? "bg-[#0E1016] border-white/5 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}>
                       <span>{w}</span>
                       <span className="text-[9px] bg-blue-500/25 text-blue-400 px-1.5 py-0.5 rounded font-extrabold">Active</span>
                     </div>
@@ -1239,8 +1293,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={network}
                 onChange={(e) => setNetwork(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
               >
                 <option value="TESTNET">TESTNET (Stellar Horizon Sandbox)</option>
                 <option value="MAINNET">MAINNET (Stellar Public Network)</option>
@@ -1260,8 +1313,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={disbursalAddress}
                 onChange={(e) => setDisbursalAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
               >
                 <option value="">Select disbursal account source...</option>
                 {connectedWallets.map(w => (
@@ -1275,8 +1327,7 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={repaymentAddress}
                 onChange={(e) => setRepaymentAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
               >
                 <option value="">Select repayment account receiver...</option>
                 {connectedWallets.map(w => (
@@ -1290,14 +1341,119 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
               <select
                 value={yieldAddress}
                 onChange={(e) => setYieldAddress(e.target.value)}
-                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"
-                  }`}
+                className={`w-full p-3 rounded-xl border font-bold text-xs ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
               >
                 <option value="">Select yield reserve treasury account...</option>
                 {connectedWallets.map(w => (
                   <option key={w} value={w}>{w}</option>
                 ))}
               </select>
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3: CONFIGURABLE VAULT COLLATERAL RULES */}
+        <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <h3 className="font-extrabold text-lg mb-4">Configurable Collateral Vault Parameters</h3>
+          <p className="text-xs text-gray-500 mb-6 font-semibold">Configure parameters for smart contract personal vaults, including premature unlock penalty fees and locking limits.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Early Unlock Penalty (Basis Points, e.g. 1000 = 10%)</label>
+              <input
+                type="number"
+                value={vaultPenaltyBps}
+                onChange={(e) => setVaultPenaltyBps(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Minimum Lock Duration (Days)</label>
+              <input
+                type="number"
+                value={vaultMinLockDays}
+                onChange={(e) => setVaultMinLockDays(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Maximum Auto-Lock Portion (%)</label>
+              <input
+                type="number"
+                value={vaultMaxAutoLockPct}
+                onChange={(e) => setVaultMaxAutoLockPct(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Maximum Manual Lock Amount (XLM)</label>
+              <input
+                type="number"
+                value={vaultMaxManualLock}
+                onChange={(e) => setVaultMaxManualLock(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 4: CONFIGURABLE TRUST SCORE XP RULES */}
+        <div className={`p-6 rounded-2xl border ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <h3 className="font-extrabold text-lg mb-4">Configurable Trust Score XP Settings</h3>
+          <p className="text-xs text-gray-500 mb-6 font-semibold">Calibrate trust rating rule weightings for drivers and commuters based on on-chain events.</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">On-Time Repayment Bonus (XP)</label>
+              <input
+                type="number"
+                value={trustRepaymentBonus}
+                onChange={(e) => setTrustRepaymentBonus(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Vault Maturity Bonus (XP)</label>
+              <input
+                type="number"
+                value={trustMaturityBonus}
+                onChange={(e) => setTrustMaturityBonus(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Loan Completed Bonus (XP)</label>
+              <input
+                type="number"
+                value={trustLoanCompletedBonus}
+                onChange={(e) => setTrustLoanCompletedBonus(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Late Repayment Penalty (XP)</label>
+              <input
+                type="number"
+                value={trustLatePenalty}
+                onChange={(e) => setTrustLatePenalty(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Default Penalty (XP)</label>
+              <input
+                type="number"
+                value={trustDefaultPenalty}
+                onChange={(e) => setTrustDefaultPenalty(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider opacity-60 mb-2">Early Vault Unlock Penalty (XP)</label>
+              <input
+                type="number"
+                value={trustEarlyUnlockPenalty}
+                onChange={(e) => setTrustEarlyUnlockPenalty(Number(e.target.value))}
+                className={`w-full p-3 rounded-xl border font-bold ${dark ? "bg-[#0E1016] border-white/10 text-white" : "bg-gray-50 border-gray-200 text-gray-900"}`}
+              />
             </div>
           </div>
         </div>

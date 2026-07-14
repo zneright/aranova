@@ -28,22 +28,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         
         // 1. Immediately restore cached auth states from LocalStorage for instant offline startup
         const cachedUser = localStorage.getItem("aranova_auth_user");
-        const cachedProfile = localStorage.getItem("aranova_auth_profile");
-        if (cachedUser && cachedProfile) {
+        if (cachedUser) {
             try {
                 const parsedUser = JSON.parse(cachedUser);
-                const parsedProfile = JSON.parse(cachedProfile);
-                if (parsedUser && parsedProfile && parsedUser.uid === parsedProfile.uid) {
-                    setCurrentUser(parsedUser);
-                    setUserData(parsedProfile);
-                    setLoading(false);
+                const cachedProfile = localStorage.getItem(`aranova_auth_profile_${parsedUser.uid}`);
+                if (cachedProfile) {
+                    const parsedProfile = JSON.parse(cachedProfile);
+                    if (parsedUser && parsedProfile && parsedUser.uid === parsedProfile.uid) {
+                        setCurrentUser(parsedUser);
+                        setUserData(parsedProfile);
+                        // Do NOT set loading to false here, so onAuthStateChanged validates the token.
+                    }
                 }
             } catch (e) {
                 console.warn("Failed to load local cached auth credentials:", e);
             }
         }
-
-
 
         const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
             if (unsubDoc) {
@@ -59,9 +59,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     displayName: user.displayName
                 }));
 
+                // Clear other users' cached profiles to prevent cross-account leakage
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key && key.startsWith("aranova_auth_profile_") && key !== `aranova_auth_profile_${user.uid}`) {
+                        localStorage.removeItem(key);
+                        i--; // Adjust index after removal
+                    }
+                }
+
                 // Listen to the user's document in Firestore (uses Firestore offline IndexedDB cache)
-                if (localStorage.getItem("aranova_firestore_exhausted") === "true") {
-                    const localProfileStr = localStorage.getItem("aranova_auth_profile");
+                if (import.meta.env.VITE_OFFLINE_SANDBOX === "true") {
+                    const localProfileStr = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
                     if (localProfileStr) {
                         try {
                             const parsed = JSON.parse(localProfileStr);
@@ -76,7 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         if (docSnap.exists()) {
                             const data = { uid: user.uid, ...docSnap.data() };
                             setUserData(data);
-                            localStorage.setItem("aranova_auth_profile", JSON.stringify(data));
+                            localStorage.setItem(`aranova_auth_profile_${user.uid}`, JSON.stringify(data));
                         }
                         setLoading(false);
                     }, (error) => {
@@ -86,7 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             localStorage.setItem("aranova_firestore_exhausted", "true");
                         }
                         // Fall back to local storage profile if offline or blocked
-                        const localProfileStr = localStorage.getItem("aranova_auth_profile");
+                        const localProfileStr = localStorage.getItem(`aranova_auth_profile_${user.uid}`);
                         if (localProfileStr) {
                             try {
                                 const parsed = JSON.parse(localProfileStr);
@@ -99,15 +108,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     });
                 }
             } else {
-                const isSandbox = import.meta.env.VITE_OFFLINE_SANDBOX === "true" || localStorage.getItem("aranova_firestore_exhausted") === "true";
+                const isSandbox = import.meta.env.VITE_OFFLINE_SANDBOX === "true";
                 const localUser = localStorage.getItem("aranova_auth_user");
                 if (isSandbox && localUser) {
+                    try {
+                        const parsedUser = JSON.parse(localUser);
+                        const localProfileStr = localStorage.getItem(`aranova_auth_profile_${parsedUser.uid}`);
+                        if (localProfileStr) {
+                            const parsedProfile = JSON.parse(localProfileStr);
+                            if (parsedProfile && parsedProfile.uid === parsedUser.uid) {
+                                setCurrentUser(parsedUser);
+                                setUserData(parsedProfile);
+                            }
+                        }
+                    } catch (e) {}
                     setLoading(false);
                 } else {
                     setCurrentUser(null);
                     setUserData(null);
                     localStorage.removeItem("aranova_auth_user");
-                    localStorage.removeItem("aranova_auth_profile");
+                    // Clean up active namespace profiles too
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && key.startsWith("aranova_auth_profile_")) {
+                            localStorage.removeItem(key);
+                            i--;
+                        }
+                    }
                     setLoading(false);
                 }
             }

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    addDoc,
     collection,
     doc,
     getDoc,
@@ -12,6 +11,7 @@ import {
     serverTimestamp,
     updateDoc,
     setDoc,
+    runTransaction,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import UserLayout from "../../components/layout/UserLayout";
@@ -30,9 +30,26 @@ import { Horizon } from "@stellar/stellar-sdk";
 
 
 const syncReceivedOfflinePayments = async (uid: string) => {
+    if (!navigator.onLine) return;
+
+    // 1. Concurrency Lock
+    const lockKey = `aranova_receive_sync_lock_${uid}`;
+    const isLocked = localStorage.getItem(lockKey);
+    if (isLocked) {
+        const lockTime = Number(isLocked);
+        if (Date.now() - lockTime < 10000) {
+            console.warn("Received sync is already running in another tab.");
+            return;
+        }
+    }
+    localStorage.setItem(lockKey, Date.now().toString());
+
     const key = `aranova_received_offline_${uid}`;
     const received = JSON.parse(localStorage.getItem(key) || "[]") as any[];
-    if (received.length === 0) return;
+    if (received.length === 0) {
+        localStorage.removeItem(lockKey);
+        return;
+    }
 
     const recSnap = await getDoc(doc(db, "users", uid));
     let vaultPct = 0;
@@ -42,37 +59,62 @@ const syncReceivedOfflinePayments = async (uid: string) => {
         preferredDays = recSnap.data().vaultPreferredDays || 30;
     }
 
+    const failed: any[] = [];
+
     for (const item of received) {
         try {
             const amount = Number(item.amount);
             const vault_portion = (amount * vaultPct) / 100;
             const wallet_portion = amount - vault_portion;
+            const txDocId = item.nonce || `receipt_${Date.now()}`;
 
-            await addDoc(collection(db, "offline_payments"), {
-                payerId: item.payerId,
-                payerKey: item.payerKey,
-                recipientId: uid,
-                amount: amount,
-                nonce: item.nonce,
-                channel: "offline_qr",
-                status: "synced",
-                createdAt: serverTimestamp(),
+            // 2. Global Nonce Deduplication and Balance Updates using a Firestore Transaction
+            await runTransaction(db, async (transaction) => {
+                const paymentRef = doc(db, "offline_payments", txDocId);
+                const paymentDoc = await transaction.get(paymentRef);
+                if (paymentDoc.exists()) {
+                    throw new Error("This offline payment nonce has already been processed.");
+                }
+
+                const payerRef = doc(db, "users", item.payerId);
+                const payerDoc = await transaction.get(payerRef);
+                if (!payerDoc.exists()) {
+                    throw new Error("Payer profile not found.");
+                }
+                const currentPayerBalance = Number(payerDoc.data().walletBalance || 0);
+                if (currentPayerBalance < amount) {
+                    throw new Error("Payer has insufficient balance on server.");
+                }
+
+                // Write payment log record
+                transaction.set(paymentRef, {
+                    payerId: item.payerId,
+                    payerKey: item.payerKey,
+                    recipientId: uid,
+                    amount: amount,
+                    nonce: item.nonce,
+                    channel: "offline_qr",
+                    status: "synced",
+                    createdAt: serverTimestamp(),
+                });
+
+                // Decrement payer balance
+                transaction.update(payerRef, {
+                    walletBalance: increment(-amount)
+                });
+
+                // Credit recipient (driver) balance & vault
+                const recipientRef = doc(db, "users", uid);
+                transaction.update(recipientRef, {
+                    walletBalance: increment(wallet_portion),
+                    vaultBalance: increment(vault_portion),
+                });
             });
 
-            try {
-                await updateDoc(doc(db, "users", item.payerId), { walletBalance: increment(-amount) });
-            } catch (err) {
-                console.warn("Could not decrement offline payer Firestore balance directly:", err);
-            }
-
-            await updateDoc(doc(db, "users", uid), { 
-                walletBalance: increment(wallet_portion),
-                vaultBalance: increment(vault_portion),
-            });
-
+            // Write vault lock record if vault portion is greater than 0
             if (vault_portion > 0) {
                 const calculatedMaturityDate = new Date(Date.now() + preferredDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-                const vaultId = `${uid}_vault_offline_${Date.now()}`;
+                const vaultId = `${uid}_vault_offline_${txDocId}`;
                 await setDoc(doc(db, "vaults", vaultId), {
                     ownerId: uid,
                     lockedAmount: vault_portion,
@@ -85,7 +127,8 @@ const syncReceivedOfflinePayments = async (uid: string) => {
                 });
             }
 
-            await addDoc(collection(db, "transactions"), {
+            // Write final transaction ledger record
+            await setDoc(doc(db, "transactions", `tx_${txDocId}`), {
                 type: "offline_qr_settled",
                 from: item.payerId,
                 to: uid,
@@ -93,12 +136,23 @@ const syncReceivedOfflinePayments = async (uid: string) => {
                 status: "completed",
                 createdAt: serverTimestamp(),
             });
-        } catch (err) {
+
+        } catch (err: any) {
             console.error("Failed to sync item:", item, err);
+            if (err.message !== "This offline payment nonce has already been processed.") {
+                failed.push(item);
+            }
         }
     }
 
-    localStorage.setItem(key, "[]");
+    // 3. Partial Failure Recovery: rewrite failed payments back to the queue
+    if (failed.length > 0) {
+        localStorage.setItem(key, JSON.stringify(failed));
+    } else {
+        localStorage.removeItem(key);
+    }
+
+    localStorage.removeItem(lockKey);
 };
 
 const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ userData, onRefresh }) => {
@@ -136,22 +190,43 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         }
     }, [userData?.publicKey, userData?.uid, userData?.email]);
 
-    const handleAcceptBluetoothPayment = () => {
+    const handleAcceptBluetoothPayment = async () => {
         if (!bluetoothNotification) return;
         try {
             const recKey = `aranova_received_offline_${userData.uid}`;
             const received = JSON.parse(localStorage.getItem(recKey) || "[]") as any[];
             
-            if (received.some(r => r.nonce === bluetoothNotification.nonce)) {
+            if (received.some((r: any) => r.nonce === bluetoothNotification.nonce)) {
                 alert("This payment has already been queued.");
                 setBluetoothNotification(null);
                 return;
             }
 
-            received.push(bluetoothNotification);
+            // Generate receiver signature as double-signing proof
+            let receiverSignature = "";
+            try {
+                const secret = localStorage.getItem(`aranova_wallet_secret_${userData.uid}`);
+                if (secret) {
+                    const { Keypair } = await import("@stellar/stellar-sdk");
+                    const kp = Keypair.fromSecret(secret);
+                    const sigBuf = kp.sign(Buffer.from(bluetoothNotification.signature || bluetoothNotification.nonce));
+                    receiverSignature = sigBuf.toString("hex");
+                }
+            } catch (e) {
+                console.warn("Receiver offline double-signing failed:", e);
+            }
+
+            const receipt = {
+                ...bluetoothNotification,
+                receiverKey: userData.publicKey || "",
+                receiverSignature,
+                doubleSigned: !!receiverSignature,
+            };
+
+            received.push(receipt);
             localStorage.setItem(recKey, JSON.stringify(received));
             checkOfflineQueue();
-            alert(`Successfully received ${bluetoothNotification.amount} XLM from commuter ${bluetoothNotification.payerName} via Bluetooth! Added to your offline queue.`);
+            alert(`Successfully received ${bluetoothNotification.amount} XLM from commuter ${bluetoothNotification.payerName} via Bluetooth! Double-signed receipt saved offline.`);
         } catch (err) {
             console.error(err);
         } finally {

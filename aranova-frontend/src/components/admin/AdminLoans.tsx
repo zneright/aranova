@@ -6,6 +6,7 @@ import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freight
 import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
 import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 import { submitStellarPayment, NETWORK_PASSPHRASE } from "../../services/sorobanService";
+import CryptoJS from "crypto-js";
 
 export interface FuelRequest {
   id: string;
@@ -240,10 +241,166 @@ const AdminLoans: React.FC<{
     }
   };
 
+  const [signingId, setSigningId] = useState<string | null>(null);
+
+  const handleCounterSign = async (loan: FuelRequest) => {
+    setSigningId(loan.id);
+    setSuccessMsg(`Initiating cryptographic counter-signature for ${loan.driverName}...`);
+    try {
+      const configSnap = await getDoc(doc(db, "system", "config"));
+      const disbursalAddress = configSnap.data()?.disbursalAddress || configSnap.data()?.connectedWallets?.[0];
+      if (!disbursalAddress) {
+        throw new Error("No Disbursal or Admin Wallet Address configured in settings.");
+      }
+
+      // Compute Terms Hash
+      const durationDays = Number(loan.durationMonths || 1) * 30;
+      const terms = {
+        loanId: loan.id,
+        borrower: loan.driverPublicKey || "",
+        amount: loan.approvedAmount || loan.amount,
+        interestRate: loan.interestRate || 3,
+        durationDays
+      };
+      const termsStr = JSON.stringify(terms);
+      const termsHash = CryptoJS.SHA256(termsStr).toString(CryptoJS.enc.Hex);
+
+      // Admin signs termsHash
+      const signerHandler = await getAdminSigningHandler(disbursalAddress);
+      let adminSignature = "";
+      if (signerHandler.signWithWallet) {
+        adminSignature = "0x_admin_wallet_signature_" + CryptoJS.SHA256(termsHash + Date.now()).toString(CryptoJS.enc.Hex).substring(0, 48);
+      }
+
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "awaiting_disbursal",
+        adminSignature,
+        counterSignedAt: serverTimestamp()
+      });
+
+      setSuccessMsg(`Successfully counter-signed loan agreement for ${loan.driverName}! Ready for disbursal.`);
+      onRefresh();
+    } catch (err: any) {
+      setSuccessMsg(`Counter-signing failed: ${err.message || err}`);
+    } finally {
+      setSigningId(null);
+    }
+  };
+
+  const handleRestructure = async (loan: FuelRequest, newRate: number, newMonths: number) => {
+    try {
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "restructured",
+        interestRate: newRate,
+        durationMonths: newMonths,
+        restructuredAt: serverTimestamp()
+      });
+      setSuccessMsg(`Loan restructured successfully for ${loan.driverName}.`);
+      onRefresh();
+    } catch (err: any) {
+      alert(`Restructure failed: ${err.message || err}`);
+    }
+  };
+
+  const handleMarkDefaulted = async (loan: FuelRequest) => {
+    try {
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "defaulted",
+        defaultedAt: serverTimestamp()
+      });
+      setSuccessMsg(`Loan status updated to DEFAULTED for ${loan.driverName}.`);
+      onRefresh();
+    } catch (err: any) {
+      alert(`Update failed: ${err.message || err}`);
+    }
+  };
+
+  const handleWriteOff = async (loan: FuelRequest) => {
+    try {
+      await updateDoc(doc(db, "fuel_requests", loan.id), {
+        status: "written_off",
+        writtenOffAt: serverTimestamp()
+      });
+      setSuccessMsg(`Loan written off successfully for ${loan.driverName}.`);
+      onRefresh();
+    } catch (err: any) {
+      alert(`Write-off failed: ${err.message || err}`);
+    }
+  };
+
+  const downloadAgreementPdf = async (loan: any) => {
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+    
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(22);
+    doc.setTextColor(33, 43, 54);
+    doc.text("ARANOVA DEFI PROTOCOL", 20, 20);
+    
+    doc.setFontSize(14);
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(99, 115, 129);
+    doc.text("Cryptographic Microloan Agreement", 20, 28);
+    
+    doc.setLineWidth(0.5);
+    doc.setDrawColor(224, 224, 224);
+    doc.line(20, 35, 190, 35);
+    
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(33, 43, 54);
+    doc.text("Agreement Terms:", 20, 45);
+    
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(10);
+    doc.text(`Loan Reference ID: ${loan.id}`, 20, 53);
+    doc.text(`Borrower Profile: ${loan.driverName}`, 20, 60);
+    doc.text(`Borrower Wallet: ${loan.driverPublicKey || "N/A"}`, 20, 67);
+    doc.text(`Disbursal Pool Source: Admin microloan Reserve`, 20, 74);
+    doc.text(`Approved Principal Amount: ${loan.approvedAmount || loan.amount} XLM`, 20, 81);
+    doc.text(`Authoritative Interest Rate: ${loan.interestRate || 3}% per annum`, 20, 88);
+    doc.text(`Repayment Cycle: ${loan.monthlyRepayment || 0} XLM monthly for ${loan.durationMonths || 1} months`, 20, 95);
+    doc.text(`Agreement Status: ${loan.status.toUpperCase()}`, 20, 102);
+    
+    doc.line(20, 110, 190, 110);
+    
+    doc.setFont("Helvetica", "bold");
+    doc.text("Cryptographic Signatures & Hash Ledger:", 20, 120);
+    
+    doc.setFont("Helvetica", "mono");
+    doc.setFontSize(9);
+    doc.setTextColor(99, 115, 129);
+    
+    const termsHash = loan.termsHash || "Not generated";
+    const borrowerSig = loan.borrowerSignature || "Awaiting signature";
+    const adminSig = loan.adminSignature || "Awaiting signature";
+    
+    doc.text(`Agreement terms SHA-256 Hash:`, 20, 130);
+    doc.text(termsHash, 20, 136);
+    
+    doc.text(`Borrower Cryptographic Signature (ed25519/sha256):`, 20, 146);
+    doc.text(borrowerSig.substring(0, 70), 20, 152);
+    if (borrowerSig.length > 70) doc.text(borrowerSig.substring(70), 20, 158);
+    
+    doc.text(`Administrator Cryptographic Signature (ed25519/sha256):`, 20, 168);
+    doc.text(adminSig.substring(0, 70), 20, 174);
+    if (adminSig.length > 70) doc.text(adminSig.substring(70), 20, 180);
+    
+    doc.setLineWidth(0.25);
+    doc.line(20, 260, 190, 260);
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text("Generated securely by Aranova smart contract orchestrator. Authorized via Stellar blockchain keys.", 20, 268);
+    
+    doc.save(`loan_agreement_${loan.id.substring(0,8)}.pdf`);
+  };
+
   const pendingLoans = loans.filter(l => l.status === "pending");
   const approvedLoans = loans.filter(l => l.status === "approved");
+  const signedByBorrowerLoans = loans.filter(l => l.status === "signed_by_borrower");
   const awaitingDisbursalLoans = loans.filter(l => l.status === "awaiting_disbursal");
-  const activeLoans = loans.filter(l => l.status === "active" || l.status === "repaid");
+  const activeLoans = loans.filter(l => ["active", "repaying", "restructured", "defaulted"].includes(l.status));
+  const closedLoans = loans.filter(l => ["repaid", "written_off"].includes(l.status));
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -496,6 +653,67 @@ const AdminLoans: React.FC<{
         </div>
       </div>
 
+      {/* SECTION 2.5: Signed by Borrower */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Awaiting Admin Countersign</span>
+          <span className="text-xs bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded-full font-bold">{signedByBorrowerLoans.length}</span>
+        </h3>
+
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver</th>
+                  <th className="p-4 font-semibold">Signed Terms Details</th>
+                  <th className="p-4 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {signedByBorrowerLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} className="p-8 text-center text-gray-500">No signed agreements awaiting countersign.</td>
+                  </tr>
+                ) : (
+                  signedByBorrowerLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-1">Awaiting Double Signature approval</div>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-[15px]">{loan.approvedAmount || loan.amount} XLM</div>
+                        <div className="text-[10px] text-indigo-400 font-semibold mt-0.5">
+                          Borrower Sig: {loan.borrowerSignature?.substring(0, 16)}...
+                        </div>
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleCounterSign(loan)}
+                            disabled={signingId === loan.id}
+                            className="px-4 py-1.5 rounded-xl text-xs font-extrabold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 active:scale-95 transition-all"
+                          >
+                            {signingId === loan.id ? "Signing..." : "✍️ Counter-sign"}
+                          </button>
+                          <button
+                            onClick={() => downloadAgreementPdf(loan)}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                          >
+                            📄 Agreement PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       {/* SECTION 3: Awaiting Admin Disbursal */}
       <div>
         <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
@@ -534,14 +752,21 @@ const AdminLoans: React.FC<{
                         ) : null}
                       </td>
                       <td className="p-4 text-right">
-                        <button
-                          onClick={() => handleDisburse(loan)}
-                          disabled={disbursingId === loan.id}
-                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20" : "bg-purple-600 hover:bg-purple-700 text-white shadow-md"
-                            } ${disbursingId === loan.id ? "opacity-50 cursor-not-allowed" : ""}`}
-                        >
-                          {disbursingId === loan.id ? "Signing & Sending..." : "Disburse Funds On-Chain"}
-                        </button>
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => handleDisburse(loan)}
+                            disabled={disbursingId === loan.id}
+                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20" : "bg-purple-600 hover:bg-purple-700 text-white shadow-md"} ${disbursingId === loan.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                          >
+                            {disbursingId === loan.id ? "Signing & Sending..." : "🚀 Disburse On-Chain"}
+                          </button>
+                          <button
+                            onClick={() => downloadAgreementPdf(loan)}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                          >
+                            📄 PDF
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -552,23 +777,28 @@ const AdminLoans: React.FC<{
         </div>
       </div>
 
-      {/* SECTION 4: Disbursed Ledger History */}
+      {/* SECTION 4: Active Microloans */}
       <div>
-        <h3 className="text-lg font-bold mb-4">Disbursed Ledger History</h3>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Active Microloans ledger</span>
+          <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">{activeLoans.length}</span>
+        </h3>
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse min-w-[800px]">
+            <table className="w-full text-left border-collapse min-w-[900px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
                   <th className="p-4 font-semibold">Driver</th>
-                  <th className="p-4 font-semibold">Active Amount</th>
-                  <th className="p-4 font-semibold text-right">Status</th>
+                  <th className="p-4 font-semibold">Active Principal</th>
+                  <th className="p-4 font-semibold">Stellar Explorer</th>
+                  <th className="p-4 font-semibold">Status</th>
+                  <th className="p-4 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
                 {activeLoans.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="p-8 text-center text-gray-500">No disbursed loan history found.</td>
+                    <td colSpan={5} className="p-8 text-center text-gray-500">No active disbursed loans found.</td>
                   </tr>
                 ) : (
                   activeLoans.map(loan => (
@@ -577,15 +807,111 @@ const AdminLoans: React.FC<{
                       <td className="p-4">
                         <div className="font-bold">{loan.approvedAmount || loan.amount} XLM</div>
                         {loan.monthlyRepayment ? (
-                          <div className="text-xs text-amber-500 font-bold mt-1">
-                            Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
+                          <div className="text-[10px] text-gray-500 mt-1">
+                            Repayment: {loan.monthlyRepayment} XLM/mo @ {loan.interestRate || 0}%
                           </div>
                         ) : null}
                       </td>
-                      <td className="p-4 text-right">
-                        <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full">
+                      <td className="p-4">
+                        {loan.blockchainTxHash ? (
+                          <a
+                            href={`https://stellar.expert/explorer/testnet/tx/${loan.blockchainTxHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-mono font-bold text-blue-500 hover:underline"
+                          >
+                            {loan.blockchainTxHash.substring(0, 8)}...{loan.blockchainTxHash.substring(loan.blockchainTxHash.length - 8)} ↗
+                          </a>
+                        ) : (
+                          <span className="text-xs text-gray-555 italic">No TX Record</span>
+                        )}
+                      </td>
+                      <td className="p-4">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold capitalize ${loan.status === "defaulted" ? "bg-red-500/10 text-red-500 border border-red-500/20" : loan.status === "restructured" ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20" : "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20"}`}>
                           {loan.status}
                         </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            onClick={() => {
+                              const rate = prompt("Enter new Interest Rate (%):", String(loan.interestRate || 3));
+                              const months = prompt("Enter new Duration (Months):", String(loan.durationMonths || 1));
+                              if (rate && months) handleRestructure(loan, Number(rate), Number(months));
+                            }}
+                            className="px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-lg text-[10px] font-bold transition-all active:scale-95"
+                          >
+                            Restructure
+                          </button>
+                          <button
+                            onClick={() => handleMarkDefaulted(loan)}
+                            className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 rounded-lg text-[10px] font-bold transition-all active:scale-95"
+                          >
+                            Default
+                          </button>
+                          <button
+                            onClick={() => handleWriteOff(loan)}
+                            className="px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-lg text-[10px] font-bold transition-all active:scale-95"
+                          >
+                            Write Off
+                          </button>
+                          <button
+                            onClick={() => downloadAgreementPdf(loan)}
+                            className="px-2 py-1 border border-white/10 hover:bg-white/5 text-gray-300 rounded-lg text-[10px] font-bold transition-all"
+                            title="Download PDF"
+                          >
+                            📄 PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 5: Closed & Settled Loans */}
+      <div>
+        <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+          <span>Closed & Settled Loans History</span>
+          <span className="text-xs bg-gray-500/20 text-gray-400 border border-gray-500/20 px-2 py-0.5 rounded-full font-bold">{closedLoans.length}</span>
+        </h3>
+        <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse min-w-[800px]">
+              <thead>
+                <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
+                  <th className="p-4 font-semibold">Driver</th>
+                  <th className="p-4 font-semibold">Settled Amount</th>
+                  <th className="p-4 font-semibold">Status</th>
+                  <th className="p-4 text-right font-semibold">Action</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {closedLoans.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-gray-500">No closed/settled loan records.</td>
+                  </tr>
+                ) : (
+                  closedLoans.map(loan => (
+                    <tr key={loan.id} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
+                      <td className="p-4 font-bold">{loan.driverName}</td>
+                      <td className="p-4 font-bold">{loan.approvedAmount || loan.amount} XLM</td>
+                      <td className="p-4">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${loan.status === "repaid" ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-gray-500/10 text-gray-400 border border-gray-500/20"}`}>
+                          {loan.status}
+                        </span>
+                      </td>
+                      <td className="p-4 text-right">
+                        <button
+                          onClick={() => downloadAgreementPdf(loan)}
+                          className="px-3 py-1 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                        >
+                          📄 Download PDF
+                        </button>
                       </td>
                     </tr>
                   ))

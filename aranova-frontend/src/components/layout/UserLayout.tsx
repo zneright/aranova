@@ -69,9 +69,20 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
   const handleSignOut = async (e: React.MouseEvent) => {
     e.preventDefault();
     try {
+      const uid = userData?.uid;
       await signOut(auth);
       localStorage.removeItem("aranova_auth_user");
-      // Keep local keystores and user profiles intact as requested
+      if (uid) {
+        localStorage.removeItem(`aranova_auth_profile_${uid}`);
+      }
+      // Clear all active auth profile caches to prevent any leak
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("aranova_auth_profile_")) {
+          localStorage.removeItem(key);
+          i--;
+        }
+      }
       window.location.href = "/";
     } catch (err) {
       console.error("Sign out failed:", err);
