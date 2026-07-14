@@ -116,10 +116,13 @@ const UserSend: React.FC = () => {
 
     const pendingKey = `aranova_pending_offline_deductions_${userData.uid}`;
     const pendingDeductions = Number(localStorage.getItem(pendingKey) || "0");
-    const availableBalance = Number(userData.walletBalance || 0) - pendingDeductions;
+    const offlineReserve = Number(userData.offlineReserve || 0);
+    const availableBalance = navigator.onLine
+      ? (Number(userData.walletBalance || 0) - offlineReserve)
+      : (offlineReserve - pendingDeductions);
 
     if (value > availableBalance) {
-      return alert(`Insufficient wallet balance. Available: ${availableBalance.toFixed(2)} XLM (accounting for pending offline payments).`);
+      return alert(`Insufficient wallet balance. Available: ${availableBalance.toFixed(2)} XLM (accounting for offline reserve and pending deductions).`);
     }
 
     if (!navigator.onLine) {
@@ -169,12 +172,16 @@ const UserSend: React.FC = () => {
           console.warn("P2P Broadcast channel error:", bcErr);
         }
 
-        addDoc(collection(db, "offline_payments"), {
+        const { doc, setDoc } = await import("firebase/firestore");
+        setDoc(doc(db, "offline_payments", nonce), {
           payerId: userData.uid,
-          recipient,
+          payerKey: userData.publicKey || "",
+          recipientId: recipient,
           amount: value,
+          nonce,
+          timestamp,
           channel: "bluetooth",
-          status: "queued-offline",
+          status: "pending_settlement",
           createdAt: serverTimestamp(),
         }).catch(() => undefined);
 
@@ -239,7 +246,7 @@ const UserSend: React.FC = () => {
           const vaultPctBps = BigInt(recipientVaultRoutingPct * 100);
 
           setProcessingState("Simulating smart contract on-chain execution...");
-          const txHash = await payP2P(userData.publicKey, destPublicKey, amountStroops, vaultPctBps, handler);
+          const txHash = await payP2P(userData.publicKey, destPublicKey, amountStroops, vaultPctBps, recipientPreferredDays, handler);
 
           setProcessingState("Finalizing ledger validation...");
 
@@ -341,37 +348,37 @@ const UserSend: React.FC = () => {
         </div>
 
         {/* Available Balance Context */}
-        <div className={`p-5 mb-8 rounded-[24px] border ${dark ? "bg-[#141620] border-white/10" : "bg-white border-gray-100 shadow-sm"}`}>
+        <div className={`p-6 mb-8 rounded-3xl border premium-shadow ${dark ? "bg-[#12141D] border-white/5" : "bg-white border-gray-150"}`}>
           <div className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-1">Available to Send</div>
-          <div className="text-2xl font-black">
+          <div className="text-3xl font-black">
             {Number(userData.walletBalance || 0).toFixed(2)} <span className="text-sm opacity-50">XLM</span>
           </div>
         </div>
 
         {/* Send Form */}
-        <div className="space-y-5">
+        <div className="space-y-6">
           <div>
             <label className="text-[10px] font-black uppercase tracking-wider text-gray-400 mb-2 block ml-1">Recipient</label>
-            <div className="flex gap-2">
+            <div className="flex gap-3">
               <input
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
                 placeholder="Email, Aranova ID, or Stellar Key"
                 className={`flex-1 px-4 py-4 rounded-2xl border text-sm font-semibold focus:outline-none focus:ring-2 transition-all ${
                   dark
-                    ? "bg-white/5 border-white/10 text-white placeholder-gray-500 focus:ring-white/20"
-                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:ring-black/10"
-                }`}
+                    ? "bg-white/5 border-white/10 text-white placeholder-gray-400 focus:ring-white/20"
+                    : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 focus:ring-black/10"
+                } premium-input`}
               />
               <button
                 onClick={() => setScanning((s) => !s)}
-                className={`px-4 rounded-2xl font-bold text-xl flex items-center justify-center transition-all ${
+                className={`w-14 rounded-2xl font-bold text-xl flex items-center justify-center transition-all ${
                   scanning
                     ? "bg-red-500/10 border border-red-500/30 text-red-500"
                     : dark
                     ? "bg-white/5 border border-white/10 text-white"
                     : "bg-gray-100 border border-gray-200 text-gray-800"
-                }`}
+                } premium-interactive`}
               >
                 {scanning ? "✕" : "📷"}
               </button>
@@ -392,16 +399,16 @@ const UserSend: React.FC = () => {
               placeholder="0.00"
               className={`w-full px-4 py-4 rounded-2xl border text-lg font-black focus:outline-none focus:ring-2 transition-all ${
                 dark
-                  ? "bg-white/5 border-white/10 text-white placeholder-gray-600 focus:ring-white/20"
-                  : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-300 focus:ring-black/10"
-              }`}
+                  ? "bg-white/5 border-white/10 text-white placeholder-gray-400 focus:ring-white/20"
+                  : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 focus:ring-black/10"
+              } premium-input`}
             />
           </div>
 
           <button
             onClick={handleSend}
             disabled={busy || !recipient || !amount || Number(amount) <= 0}
-            className={`w-full mt-4 py-4 rounded-2xl font-black text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${btnColor} ${textColor} ${btnHover}`}
+            className={`w-full mt-4 py-4.5 rounded-2xl font-black text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${btnColor} ${textColor} ${btnHover} premium-interactive`}
           >
             {busy ? "Processing..." : "Send Now"}
           </button>
@@ -420,8 +427,8 @@ const UserSend: React.FC = () => {
         )}
 
         {showPinModal && (
-          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-[9999] p-6">
-            <div className={`rounded-[32px] p-8 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center z-[9999] p-0 sm:p-6 animate-fadeIn">
+            <div className={`bottom-sheet sm:rounded-[32px] rounded-t-[32px] p-8 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
               <span className="text-3xl mb-3 block">🔑</span>
               <h3 className="text-lg font-black">Confirm Payment</h3>
               <p className="text-[10px] text-gray-400 mt-1 uppercase tracking-wider font-bold">{pinPurpose}</p>
@@ -452,8 +459,8 @@ const UserSend: React.FC = () => {
         )}
         
         {showReceiptModal && receiptData && (
-          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6 animate-fadeIn">
-            <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center z-[9999] p-0 sm:p-6 animate-fadeIn">
+            <div className={`bottom-sheet sm:rounded-[32px] rounded-t-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
               <div className="w-16 h-16 bg-[#10B981]/20 text-[#10B981] rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>

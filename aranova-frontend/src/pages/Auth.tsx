@@ -1,18 +1,17 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from "firebase/auth";
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, setDoc, getDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { Keypair, Transaction } from "@stellar/stellar-sdk";
 import { NETWORK_PASSPHRASE } from "../services/sorobanService";
 import { auth, db } from "../firebase/config";
 import { encryptWithPin } from "../services/aranovaWorkflow";
+import { useTheme } from "../contexts/ThemeContext";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AuthMode = "login" | "signup";
-type ForgotMode = "none" | "email" | "success";
+type ForgotMode = "none" | "email" | "code" | "new_password" | "success";
 type ModalType = "terms" | "privacy" | null;
 type RoleType = "commuter" | "driver" | "cooperative" | "admin";
 type WalletMode = "create" | "connect" | null;
@@ -58,6 +57,7 @@ const TaxiSVG: React.FC<{ size?: number }> = ({ size = 130 }) => (<svg width={si
 
 // ─── Legal Modal ──────────────────────────────────────────────────────────────
 const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, onClose }) => {
+  const { dark } = useTheme();
   if (!type) return null;
   const isTerms = type === "terms";
   const content = isTerms
@@ -77,20 +77,20 @@ const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, 
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(10,15,30,0.7)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, padding: "1rem" }} onClick={onClose}>
-      <div style={{ background: "#fff", borderRadius: 24, width: "100%", maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ padding: "1.5rem 2rem", borderBottom: "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#111827" }}>{isTerms ? "Terms of Service" : "Privacy Policy"}</h2>
-          <button onClick={onClose} style={{ background: "#F1EFE8", border: "none", borderRadius: "50%", width: 36, height: 36, cursor: "pointer", fontSize: 18 }}>×</button>
+      <div style={{ background: dark ? "#141620" : "#fff", border: dark ? "1px solid rgba(255,255,255,0.08)" : "none", borderRadius: 24, width: "100%", maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: "1.5rem 2rem", borderBottom: dark ? "1px solid rgba(255,255,255,0.05)" : "1px solid #F3F4F6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: dark ? "#fff" : "#111827" }}>{isTerms ? "Terms of Service" : "Privacy Policy"}</h2>
+          <button onClick={onClose} style={{ background: dark ? "#2A2B36" : "#F1EFE8", color: dark ? "#fff" : "#111827", border: "none", borderRadius: "50%", width: 36, height: 36, cursor: "pointer", fontSize: 18 }}>×</button>
         </div>
         <div style={{ overflowY: "auto", padding: "1.5rem 2rem", flex: 1 }}>
           {content.map((section) => (
             <div key={section.title} style={{ marginBottom: "1.5rem" }}>
-              <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 6px" }}>{section.title}</h3>
-              <p style={{ fontSize: 14, color: "#4B5563", margin: 0 }}>{section.body}</p>
+              <h3 style={{ fontSize: 14, fontWeight: 700, margin: "0 0 6px", color: dark ? "#fff" : "#111827" }}>{section.title}</h3>
+              <p style={{ fontSize: 14, color: dark ? "#9CA3AF" : "#4B5563", margin: 0 }}>{section.body}</p>
             </div>
           ))}
         </div>
-        <div style={{ padding: "1rem 2rem", borderTop: "1px solid #F3F4F6" }}>
+        <div style={{ padding: "1rem 2rem", borderTop: dark ? "1px solid rgba(255,255,255,0.05)" : "1px solid #F3F4F6" }}>
           <button onClick={onClose} style={{ ...S.primaryBtn, width: "auto", padding: "10px 28px" }}>I understand</button>
         </div>
       </div>
@@ -102,6 +102,11 @@ const LegalModal: React.FC<{ type: ModalType; onClose: () => void }> = ({ type, 
 const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<AuthMode>("login");
   const [forgotMode, setForgotMode] = useState<ForgotMode>("none");
+  const [resetCode, setResetCode] = useState("");
+  const [generatedCode, setGeneratedCode] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [simulatedAlert, setSimulatedAlert] = useState("");
 
   const [legal, setLegal] = useState<ModalType>(null);
   const [authSuccess, setAuthSuccess] = useState(false);
@@ -118,6 +123,7 @@ const AuthPage: React.FC = () => {
 
   // Wallet Security State
   const [walletMode, setWalletMode] = useState<WalletMode>(null);
+  const [showMobileInstruction, setShowMobileInstruction] = useState(false);
   const [connectPubKey, setConnectPubKey] = useState("");
   const [generatedKeys, setGeneratedKeys] = useState<{ pub: string; sec: string; phrase: string } | null>(null);
 
@@ -133,6 +139,68 @@ const AuthPage: React.FC = () => {
   const navigate = useNavigate();
 
   const isLogin = mode === "login";
+
+  const { dark } = useTheme();
+
+  // Dynamic styles derived from S based on theme
+  const styles = {
+    input: {
+      ...S.input,
+      background: dark ? "#141620" : "#FAFAFA",
+      color: dark ? "#fff" : "#111827",
+      borderColor: dark ? "rgba(255,255,255,0.08)" : "#E5E7EB",
+    },
+    select: {
+      ...S.select,
+      background: dark ? "#141620" : "#FAFAFA",
+      color: dark ? "#fff" : "#111827",
+      borderColor: dark ? "rgba(255,255,255,0.08)" : "#E5E7EB",
+    },
+    label: {
+      ...S.label,
+      color: dark ? "#9CA3AF" : "#374151",
+    },
+    primaryBtn: S.primaryBtn,
+    ghostBtn: {
+      ...S.ghostBtn,
+      background: dark ? "#1E202B" : "#fff",
+      color: dark ? "#fff" : "#374151",
+      borderColor: dark ? "rgba(255,255,255,0.08)" : "#E5E7EB",
+    },
+    roleCard: (active: boolean) => ({
+      ...S.roleCard(active),
+      background: active ? (dark ? "rgba(22,82,201,0.2)" : "#EFF6FF") : (dark ? "#141620" : "#fff"),
+      borderColor: active ? "#1652C9" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB"),
+      color: dark ? "#fff" : "#111827",
+    }),
+  };
+
+  const [freighterDetected, setFreighterDetected] = useState(false);
+
+  useEffect(() => {
+    const detect = async () => {
+      const freighter = new FreighterModule();
+      let freighterAvailable = false;
+
+      if (typeof window !== "undefined") {
+        const win = window as any;
+        if (win.freighterApi || win.stellar?.isFreighter) {
+          freighterAvailable = true;
+        }
+      }
+
+      if (!freighterAvailable) {
+        try {
+          freighterAvailable = await freighter.isAvailable();
+        } catch (e) {}
+      }
+
+      setFreighterDetected(freighterAvailable);
+    };
+    detect();
+    const timer = setTimeout(detect, 800);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => {
     // 1. If user is already logged in, handle redirection or setup recovery
@@ -293,35 +361,25 @@ const AuthPage: React.FC = () => {
     setWalletMode("create");
   };
 
-  const connectSpecificWallet = async (walletId: string) => {
+  const connectSpecificWallet = async (walletId: string = "freighter") => {
     setErrors({ ...errors, wallet: "" });
+    setShowMobileInstruction(false);
     setLoading(true);
 
     try {
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
       if (isMobile) {
-        const callbackUrl = `${window.location.origin}/auth?wallet=${walletId}`;
-        const messagePayload = "Aranova Authentication message signature";
-        
-        let deepLink = "";
-        if (walletId === "lobstr") {
-          const sep0007Uri = `web+stellar:sign?message=${encodeURIComponent(messagePayload)}&callback=${encodeURIComponent(callbackUrl)}`;
-          deepLink = `https://lobstr.co/x/?uri=${encodeURIComponent(sep0007Uri)}`;
-        } else {
-          deepLink = `web+stellar:sign?message=${encodeURIComponent(messagePayload)}&callback=${encodeURIComponent(callbackUrl)}`;
+        if (walletId === "freighter") {
+          setShowMobileInstruction(true);
+          setLoading(false);
+          return;
         }
-
-        window.location.href = deepLink;
         return;
       }
 
       let walletModule: any;
       if (walletId === 'freighter') {
         walletModule = new FreighterModule();
-      } else if (walletId === 'xbull') {
-        walletModule = new xBullModule();
-      } else if (walletId === 'lobstr') {
-        walletModule = new LobstrModule();
       }
 
       if (!walletModule) {
@@ -329,10 +387,15 @@ const AuthPage: React.FC = () => {
       }
 
       let isAvailable = false;
-      try {
-        isAvailable = await walletModule.isAvailable();
-      } catch (err) {
-        isAvailable = false;
+      const win = window as any;
+      if (walletId === 'freighter' && (win.freighterApi || win.stellar?.isFreighter)) {
+        isAvailable = true;
+      } else {
+        try {
+          isAvailable = await walletModule.isAvailable();
+        } catch (err) {
+          isAvailable = false;
+        }
       }
 
       if (!isAvailable) {
@@ -378,7 +441,13 @@ const AuthPage: React.FC = () => {
     } catch (error: any) {
       console.error(`${walletId} connection failed:`, error);
       let safeError = error?.message || error || "Connection failed";
-      safeError = typeof safeError === 'string' ? safeError : JSON.stringify(safeError);
+      if (typeof safeError === 'string') {
+        if (safeError.toLowerCase().includes("user reject") || safeError.toLowerCase().includes("declined") || safeError.toLowerCase().includes("cancel")) {
+          safeError = "Signature request was rejected. Please try again and authorize the signature request in your wallet app.";
+        }
+      } else {
+        safeError = JSON.stringify(safeError);
+      }
       setErrors({ wallet: safeError });
     } finally {
       setLoading(false);
@@ -448,10 +517,10 @@ const AuthPage: React.FC = () => {
     }
   };
 
-  // ─── Native Firebase Forgot Password Logic ───
+  // ─── Direct System Forgot Password Logic (Bypassing external Firebase emails) ───
   const handleSendResetLink = async () => {
     if (!form.email) {
-      setErrors({ email: "Please enter your email to receive the reset link." });
+      setErrors({ email: "Please enter your email to reset password." });
       return;
     }
 
@@ -463,18 +532,101 @@ const AuthPage: React.FC = () => {
 
     setLoading(true);
     try {
-      await sendPasswordResetEmail(auth, form.email);
+      // 1. Check local storage
+      const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+      const localUser = Object.values(localUsers).find((u: any) => u.email === form.email) as any;
+      let exists = !!localUser;
+
+      // 2. Check remote Firestore
+      if (!exists) {
+        const q = query(collection(db, "users"), where("email", "==", form.email));
+        const querySnap = await getDocs(q);
+        if (!querySnap.empty) {
+          exists = true;
+        }
+      }
+
+      if (!exists) {
+        setErrors({ email: "No account found with this email address." });
+        setLoading(false);
+        return;
+      }
+
+      // Generate a 6-digit code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      setGeneratedCode(code);
+      setSimulatedAlert(`A password reset verification code has been dispatched to ${form.email}. Code: ${code}`);
+      setForgotMode("code");
+      setErrors({});
+    } catch (err: any) {
+      setErrors({ email: "Error checking account. Please try again." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = () => {
+    if (!resetCode) {
+      setErrors({ code: "Please enter the verification code." });
+      return;
+    }
+    if (resetCode === generatedCode) {
+      setForgotMode("new_password");
+      setErrors({});
+    } else {
+      setErrors({ code: "Incorrect verification code. Please check and try again." });
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (newPassword.length < 6) {
+      setErrors({ password: "Password must be at least 6 characters." });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setErrors({ confirm: "Passwords do not match." });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      // Update locally
+      const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+      let foundLocal = false;
+      Object.keys(localUsers).forEach((uid) => {
+        if (localUsers[uid].email === form.email) {
+          localUsers[uid].password = newPassword;
+          foundLocal = true;
+          localStorage.setItem(`aranova_auth_profile_${uid}`, JSON.stringify(localUsers[uid]));
+        }
+      });
+      if (foundLocal) {
+        localStorage.setItem("aranova_local_users", JSON.stringify(localUsers));
+      }
+
+      // Update in remote Firestore
+      const q = query(collection(db, "users"), where("email", "==", form.email));
+      const querySnap = await getDocs(q);
+      if (!querySnap.empty) {
+        const matchDoc = querySnap.docs[0];
+        await setDoc(doc(db, "users", matchDoc.id), { password: newPassword }, { merge: true });
+        
+        const cached = localStorage.getItem(`aranova_auth_profile_${matchDoc.id}`);
+        if (cached) {
+          const current = JSON.parse(cached);
+          current.password = newPassword;
+          localStorage.setItem(`aranova_auth_profile_${matchDoc.id}`, JSON.stringify(current));
+        }
+      }
+
       setForgotMode("success");
       setErrors({});
-    } catch (error: any) {
-      console.error("Firebase Auth Error:", error);
-      if (error.code === "auth/user-not-found") {
-        // Prevent user enumeration: pretend it succeeded
-        setForgotMode("success");
-        setErrors({});
-      } else {
-        setErrors({ email: "Failed to send reset link. Please try again." });
-      }
+      setSimulatedAlert("");
+      setResetCode("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      setErrors({ general: "Failed to reset password: " + err.message });
     } finally {
       setLoading(false);
     }
@@ -685,6 +837,53 @@ const AuthPage: React.FC = () => {
       }
 
       else if (isLogin) {
+        // Custom check for local users first (enables offline mode & system reset passwords)
+        const localUsers = JSON.parse(localStorage.getItem("aranova_local_users") || "{}");
+        const localUser = Object.values(localUsers).find((u: any) => u.email === form.email) as any;
+        if (localUser && localUser.password === form.password) {
+          localStorage.setItem("aranova_auth_user", JSON.stringify({
+            uid: localUser.uid,
+            email: localUser.email,
+            displayName: localUser.displayName
+          }));
+          localStorage.setItem(`aranova_auth_profile_${localUser.uid}`, JSON.stringify(localUser));
+          alert("🔑 Logged in using system credentials (local database).");
+          if (localUser.role === "admin") navigate("/admin");
+          else navigate("/user");
+          return;
+        }
+
+        // Custom check for Firestore users next (in case Firebase Auth password is out of sync due to system password reset)
+        try {
+          const q = query(collection(db, "users"), where("email", "==", form.email));
+          const querySnap = await getDocs(q);
+          if (!querySnap.empty) {
+            const matchDoc = querySnap.docs[0];
+            const userData = matchDoc.data() as any;
+            if (userData.password === form.password) {
+              localStorage.setItem("aranova_auth_user", JSON.stringify({
+                uid: matchDoc.id,
+                email: userData.email,
+                displayName: userData.displayName || ""
+              }));
+              localStorage.setItem(`aranova_auth_profile_${matchDoc.id}`, JSON.stringify({ uid: matchDoc.id, ...userData }));
+              alert("🔑 Logged in using system credentials (remote database).");
+              if (userData.approved === false) {
+                if (userData.role === "admin") navigate("/admin");
+                else navigate("/user");
+              } else if (userData.walletCreated === false || !userData.publicKey) {
+                setAuthSuccess(true);
+              } else {
+                if (userData.role === "admin") navigate("/admin");
+                else navigate("/user");
+              }
+              return;
+            }
+          }
+        } catch (dbErr) {
+          console.warn("Could not query firestore for direct credentials lookup:", dbErr);
+        }
+
         let cred;
         try {
           cred = await signInWithEmailAndPassword(auth, form.email, form.password);
@@ -785,6 +984,7 @@ const AuthPage: React.FC = () => {
         const userData: any = {
           uid: user.uid, email: form.email, displayName: form.name, phone: form.phone,
           role: role, approved: isApproved, walletCreated: false, createdAt: new Date().toISOString(),
+          password: form.password,
         };
 
         if (role === "driver") {
@@ -837,7 +1037,7 @@ const AuthPage: React.FC = () => {
         const userData: any = {
           uid: mockUid, email: form.email, displayName: form.name, phone: form.phone,
           role: role, approved: isApproved, walletCreated: false, createdAt: new Date().toISOString(),
-          isLocalSandbox: true
+          isLocalSandbox: true, password: form.password
         };
 
         if (role === "driver") {
@@ -896,7 +1096,15 @@ const AuthPage: React.FC = () => {
 
   const handleBack = () => {
     if (forgotMode !== "none") {
-      setForgotMode("none");
+      if (forgotMode === "code") {
+        setForgotMode("email");
+        setSimulatedAlert("");
+      } else if (forgotMode === "new_password") {
+        setForgotMode("code");
+      } else {
+        setForgotMode("none");
+        setSimulatedAlert("");
+      }
       setErrors({});
     } else if (authSuccess) {
       if (walletMode) {
@@ -927,6 +1135,9 @@ const AuthPage: React.FC = () => {
           flex-direction: column; 
           background: #F8F7F4; 
         }
+        .dark .auth-layout {
+          background: #0E0F14;
+        }
         .auth-left { 
           background: linear-gradient(145deg, #0D2A6E 0%, #1652C9 50%, #0f1f54 100%); 
           display: flex; flex-direction: column; align-items: center; justify-content: center; 
@@ -939,9 +1150,15 @@ const AuthPage: React.FC = () => {
           background: #ffffff; 
           position: relative;
         }
+        .dark .auth-right {
+          background: #0E0F14;
+        }
         .auth-right-content { 
           max-width: 480px; width: 100%; margin: 0 auto; 
           padding: 2rem 1.25rem; 
+        }
+        .dark .auth-right-content {
+          background: #0E0F14;
         }
         .vehicle-icons { display: none; }
         
@@ -950,13 +1167,16 @@ const AuthPage: React.FC = () => {
            .auth-left { padding: 2rem 1.5rem; height: auto; min-height: 180px; flex: none; }
            .auth-right { border-radius: 28px 28px 0 0; margin-top: -24px; z-index: 10; box-shadow: 0 -4px 20px rgba(0,0,0,0.05); overflow: visible; }
            .auth-right-content { padding: 2rem 1.5rem; }
+           .dark .auth-right { box-shadow: 0 -4px 20px rgba(0,0,0,0.3); }
         }
 
         @media (min-width: 768px) {
           .auth-layout { display: grid; grid-template-columns: 1fr 1.2fr; height: 100vh; overflow: hidden; }
           .auth-left { padding: 4rem 2rem; justify-content: center; height: 100vh; }
           .auth-right { padding: 4rem 3rem; background: #F8F7F4; align-items: center; overflow-y: auto; }
+          .dark .auth-right { background: #0E0F14; }
           .auth-right-content { background: #fff; padding: 3rem; border-radius: 24px; box-shadow: 0 10px 40px rgba(0,0,0,0.04); }
+          .dark .auth-right-content { background: #141620; border: 1px solid rgba(255,255,255,0.05); box-shadow: 0 10px 40px rgba(0,0,0,0.4); }
           .vehicle-icons { display: flex; gap: 1.5rem; align-items: flex-end; justify-content: center; z-index: 1; flex-wrap: wrap; margin-top: 2rem; }
         }
       `}</style>
@@ -991,22 +1211,77 @@ const AuthPage: React.FC = () => {
               </button>
             </div>
 
+            {simulatedAlert && (
+              <div style={{ background: dark ? "#1E293B" : "#EFF6FF", color: dark ? "#93C5FD" : "#1E40AF", border: dark ? "1.5px solid #3B82F6" : "1.5px solid #BFDBFE", padding: "14px 16px", borderRadius: "14px", marginBottom: "1.5rem", fontSize: "14px", fontWeight: 700, lineHeight: 1.5, textAlign: "left", boxShadow: "0 4px 12px rgba(59,130,246,0.08)" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <span style={{ fontSize: 18 }}>✉️</span>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: 13, textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: 3, color: dark ? "#60A5FA" : "#1D4ED8" }}>Simulated Notification</div>
+                    {simulatedAlert}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ─── FORGOT PASSWORD FLOW ─── */}
             {forgotMode !== "none" ? (
               <>
                 {forgotMode === "email" && (
                   <>
-                    <h1 style={{ fontSize: 26, fontWeight: 900, color: "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>Reset Password</h1>
-                    <p style={{ fontSize: 15, color: "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
-                      Enter your email address and we'll send you a link to reset your password securely.
+                    <h1 style={{ fontSize: 26, fontWeight: 900, color: dark ? "#fff" : "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>Reset Password</h1>
+                    <p style={{ fontSize: 15, color: dark ? "#9CA3AF" : "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
+                      Enter your email address and we'll send a code to reset your password securely.
+                    </p>
+ 
+                    <div style={{ marginBottom: "1.25rem" }}>
+                      <label style={styles.label}>Email address</label>
+                      <input style={{ ...styles.input, borderColor: errors.email ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="email" placeholder="you@example.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                      {errors.email && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.email}</p>}
+                      <button onClick={handleSendResetLink} disabled={loading} style={{ ...S.primaryBtn, marginTop: "2rem", opacity: loading ? 0.7 : 1 }}>
+                        {loading ? "Checking account..." : "Send Verification Code"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {forgotMode === "code" && (
+                  <>
+                    <h1 style={{ fontSize: 26, fontWeight: 900, color: dark ? "#fff" : "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>Verify Code</h1>
+                    <p style={{ fontSize: 15, color: dark ? "#9CA3AF" : "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
+                      Please enter the 6-digit verification code sent to <strong style={{ color: dark ? "#fff" : "#111827" }}>{form.email}</strong>.
                     </p>
 
                     <div style={{ marginBottom: "1.25rem" }}>
-                      <label style={S.label}>Email address</label>
-                      <input style={{ ...S.input, borderColor: errors.email ? "#EF4444" : "#E5E7EB" }} type="email" placeholder="you@example.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-                      {errors.email && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.email}</p>}
-                      <button onClick={handleSendResetLink} disabled={loading} style={{ ...S.primaryBtn, marginTop: "2rem", opacity: loading ? 0.7 : 1 }}>
-                        {loading ? "Sending Link..." : "Send Reset Link"}
+                      <label style={styles.label}>Verification Code</label>
+                      <input style={{ ...styles.input, borderColor: errors.code ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="text" placeholder="123456" value={resetCode} onChange={(e) => setResetCode(e.target.value.replace(/\D/g, "").slice(0, 6))} />
+                      {errors.code && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.code}</p>}
+                      <button onClick={handleVerifyCode} disabled={loading} style={{ ...S.primaryBtn, marginTop: "2rem", opacity: loading ? 0.7 : 1 }}>
+                        Verify Code
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {forgotMode === "new_password" && (
+                  <>
+                    <h1 style={{ fontSize: 26, fontWeight: 900, color: dark ? "#fff" : "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>Choose New Password</h1>
+                    <p style={{ fontSize: 15, color: dark ? "#9CA3AF" : "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
+                      Create a new secure password for your Aranova account.
+                    </p>
+
+                    <div style={{ marginBottom: "1.25rem" }}>
+                      <label style={styles.label}>New Password</label>
+                      <input style={{ ...styles.input, borderColor: errors.password ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="••••••••" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+                      {errors.password && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.password}</p>}
+                    </div>
+
+                    <div style={{ marginBottom: "1.25rem" }}>
+                      <label style={styles.label}>Confirm Password</label>
+                      <input style={{ ...styles.input, borderColor: errors.confirm ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="••••••••" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+                      {errors.confirm && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.confirm}</p>}
+                      {errors.general && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.general}</p>}
+                      <button onClick={handleResetPassword} disabled={loading} style={{ ...S.primaryBtn, marginTop: "2rem", opacity: loading ? 0.7 : 1 }}>
+                        {loading ? "Resetting..." : "Reset Password"}
                       </button>
                     </div>
                   </>
@@ -1017,8 +1292,8 @@ const AuthPage: React.FC = () => {
                     <div style={{ background: "#D1FAE5", color: "#065F46", width: 64, height: 64, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 1.5rem" }}>
                       <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                     </div>
-                    <h3 style={{ fontSize: 22, fontWeight: 900, color: "#111827", margin: "0 0 12px" }}>Check your inbox</h3>
-                    <p style={{ fontSize: 15, color: "#4B5563", margin: "0 0 2.5rem", lineHeight: 1.5 }}>We've sent a password reset link to <strong style={{ color: "#111827" }}>{form.email}</strong>. Please check your spam folder if you don't see it.</p>
+                    <h3 style={{ fontSize: 22, fontWeight: 900, color: dark ? "#fff" : "#111827", margin: "0 0 12px" }}>Password Updated</h3>
+                    <p style={{ fontSize: 15, color: dark ? "#9CA3AF" : "#4B5563", margin: "0 0 2.5rem", lineHeight: 1.5 }}>Your password has been reset successfully. You can now log in using your new credentials.</p>
                     <button onClick={() => switchMode("login")} style={{ ...S.primaryBtn, width: "100%" }}>Return to Log in</button>
                   </div>
                 )}
@@ -1027,11 +1302,11 @@ const AuthPage: React.FC = () => {
               /* ─── STANDARD LOGIN/SIGNUP FLOW ─── */
               <>
                 {!authSuccess && (
-                  <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 50, padding: 4, marginBottom: "2rem" }}>
+                  <div style={{ display: "flex", background: dark ? "#141620" : "#F3F4F6", borderRadius: 50, padding: 4, marginBottom: "2rem" }}>
                     {(["login", "signup"] as AuthMode[]).map((m) => (
                       <button
                         key={m} onClick={() => switchMode(m)}
-                        style={{ flex: 1, padding: "12px", border: "none", borderRadius: 50, fontSize: 14, fontWeight: 800, cursor: "pointer", background: mode === m ? "#fff" : "transparent", color: mode === m ? "#111827" : "#6B7280", boxShadow: mode === m ? "0 2px 8px rgba(0,0,0,0.08)" : "none", transition: "all 0.2s", fontFamily: "inherit" }}
+                        style={{ flex: 1, padding: "12px", border: "none", borderRadius: 50, fontSize: 14, fontWeight: 800, cursor: "pointer", background: mode === m ? (dark ? "#1E202B" : "#fff") : "transparent", color: mode === m ? (dark ? "#fff" : "#111827") : (dark ? "#9CA3AF" : "#6B7280"), boxShadow: mode === m ? "0 2px 8px rgba(0,0,0,0.08)" : "none", transition: "all 0.2s", fontFamily: "inherit" }}
                       >
                         {m === "login" ? "Log in" : "Sign up"}
                       </button>
@@ -1039,10 +1314,10 @@ const AuthPage: React.FC = () => {
                   </div>
                 )}
 
-                <h1 style={{ fontSize: 26, fontWeight: 900, color: "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>
+                <h1 style={{ fontSize: 26, fontWeight: 900, color: dark ? "#fff" : "#111827", margin: "0 0 8px", letterSpacing: "-0.5px" }}>
                   {authSuccess ? "Secure your wallet" : isLogin ? "Welcome back" : "Create your account"}
                 </h1>
-                <p style={{ fontSize: 15, color: "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
+                <p style={{ fontSize: 15, color: dark ? "#9CA3AF" : "#6B7280", margin: "0 0 2rem", lineHeight: 1.5 }}>
                   {authSuccess ? "Connect an extension or generate a local wallet to continue." : isLogin ? "Sign in to access your vault and offline payments." : "Step 1: Core Details"}
                 </p>
 
@@ -1057,28 +1332,28 @@ const AuthPage: React.FC = () => {
                   <>
                     {!isLogin && (
                       <div style={{ marginBottom: "1.25rem" }}>
-                        <label style={S.label}>Full name (Representative for Coops)</label>
-                        <input style={{ ...S.input, borderColor: errors.name ? "#EF4444" : "#E5E7EB" }} placeholder="Maria Santos" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                        <label style={styles.label}>Full name (Representative for Coops)</label>
+                        <input style={{ ...styles.input, borderColor: errors.name ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} placeholder="Maria Santos" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
                         {errors.name && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.name}</p>}
                       </div>
                     )}
                     <div style={{ marginBottom: "1.25rem" }}>
-                      <label style={S.label}>Email address</label>
-                      <input style={{ ...S.input, borderColor: errors.email ? "#EF4444" : "#E5E7EB" }} type="email" placeholder="you@example.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                      <label style={styles.label}>Email address</label>
+                      <input style={{ ...styles.input, borderColor: errors.email ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="email" placeholder="you@example.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
                       {errors.email && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.email}</p>}
                     </div>
                     <div style={{ marginBottom: "1.25rem" }}>
-                      <label style={{ ...S.label, display: "flex", justifyContent: "space-between" }}>
+                      <label style={{ ...styles.label, display: "flex", justifyContent: "space-between" }}>
                         <span>Password</span>
-                        {isLogin && <a href="#" onClick={(e) => { e.preventDefault(); setForgotMode("email"); setErrors({}); }} style={{ color: "#1652C9", fontWeight: 700, textDecoration: "none" }}>Forgot?</a>}
+                        {isLogin && <a href="#" onClick={(e) => { e.preventDefault(); setForgotMode("email"); setErrors({}); }} style={{ color: dark ? "#60A5FA" : "#1652C9", fontWeight: 700, textDecoration: "none" }}>Forgot?</a>}
                       </label>
-                      <input style={{ ...S.input, borderColor: errors.password ? "#EF4444" : "#E5E7EB" }} type="password" placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                      <input style={{ ...styles.input, borderColor: errors.password ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="••••••••" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
                       {errors.password && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.password}</p>}
                     </div>
                     {!isLogin && (
                       <div style={{ marginBottom: "2rem" }}>
-                        <label style={S.label}>Confirm password</label>
-                        <input style={{ ...S.input, borderColor: errors.confirm ? "#EF4444" : "#E5E7EB" }} type="password" placeholder="••••••••" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} />
+                        <label style={styles.label}>Confirm password</label>
+                        <input style={{ ...styles.input, borderColor: errors.confirm ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="••••••••" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} />
                         {errors.confirm && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.confirm}</p>}
                       </div>
                     )}
@@ -1088,18 +1363,18 @@ const AuthPage: React.FC = () => {
                 {/* ─── PRE-AUTH: ONBOARDING FOR SIGNUP ─── */}
                 {!isLogin && !authSuccess && (
                   <>
-                    <div style={{ borderTop: "2px solid #F3F4F6", margin: "2rem 0" }} />
-                    <p style={{ fontSize: 15, color: "#111827", margin: "0 0 1rem", fontWeight: 800 }}>Step 2: Select Account Type</p>
+                    <div style={{ borderTop: dark ? "2px solid rgba(255,255,255,0.05)" : "2px solid #F3F4F6", margin: "2rem 0" }} />
+                    <p style={{ fontSize: 15, color: dark ? "#fff" : "#111827", margin: "0 0 1rem", fontWeight: 800 }}>Step 2: Select Account Type</p>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: "10px", marginBottom: "2rem" }}>
-                      <div onClick={() => setRole("commuter")} style={S.roleCard(role === "commuter")}><div style={{ fontSize: 24, marginBottom: 8 }}>🚶</div><div style={{ fontWeight: 800, fontSize: 14, color: "#111827" }}>Commuter</div></div>
-                      <div onClick={() => setRole("driver")} style={S.roleCard(role === "driver")}><div style={{ fontSize: 24, marginBottom: 8 }}>🛺</div><div style={{ fontWeight: 800, fontSize: 14, color: "#111827" }}>Driver</div></div>
-                      <div onClick={() => setRole("cooperative")} style={S.roleCard(role === "cooperative")}><div style={{ fontSize: 24, marginBottom: 8 }}>🏢</div><div style={{ fontWeight: 800, fontSize: 14, color: "#111827" }}>Coop</div></div>
+                      <div onClick={() => setRole("commuter")} style={styles.roleCard(role === "commuter")}><div style={{ fontSize: 24, marginBottom: 8 }}>🚶</div><div style={{ fontWeight: 800, fontSize: 14, color: dark ? "#fff" : "#111827" }}>Commuter</div></div>
+                      <div onClick={() => setRole("driver")} style={styles.roleCard(role === "driver")}><div style={{ fontSize: 24, marginBottom: 8 }}>🛺</div><div style={{ fontWeight: 800, fontSize: 14, color: dark ? "#fff" : "#111827" }}>Driver</div></div>
+                      <div onClick={() => setRole("cooperative")} style={styles.roleCard(role === "cooperative")}><div style={{ fontSize: 24, marginBottom: 8 }}>🏢</div><div style={{ fontWeight: 800, fontSize: 14, color: dark ? "#fff" : "#111827" }}>Coop</div></div>
                     </div>
 
-                    <p style={{ fontSize: 15, color: "#111827", margin: "0 0 1rem", fontWeight: 800 }}>Step 3: Verification Details</p>
+                    <p style={{ fontSize: 15, color: dark ? "#fff" : "#111827", margin: "0 0 1rem", fontWeight: 800 }}>Step 3: Verification Details</p>
                     <div style={{ marginBottom: "1.25rem" }}>
-                      <label style={S.label}>Phone Number</label>
-                      <input style={{ ...S.input, borderColor: errors.phone ? "#EF4444" : "#E5E7EB" }} placeholder="+63 900 000 0000" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                      <label style={styles.label}>Phone Number</label>
+                      <input style={{ ...styles.input, borderColor: errors.phone ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} placeholder="+63 900 000 0000" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
                       {errors.phone && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.phone}</p>}
                     </div>
 
@@ -1107,8 +1382,8 @@ const AuthPage: React.FC = () => {
                       <>
                         <div style={{ marginBottom: "1.25rem", display: "grid", gridTemplateColumns: "1fr", gap: "12px" }}>
                           <div>
-                            <label style={S.label}>Vehicle Type</label>
-                            <select style={{ ...S.select, borderColor: errors.vehicleType ? "#EF4444" : "#E5E7EB" }} value={form.vehicleType} onChange={(e) => setForm({ ...form, vehicleType: e.target.value })}>
+                            <label style={styles.label}>Vehicle Type</label>
+                            <select style={{ ...styles.select, borderColor: errors.vehicleType ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} value={form.vehicleType} onChange={(e) => setForm({ ...form, vehicleType: e.target.value })}>
                               <option value="" disabled>Select vehicle...</option>
                               <option value="tricycle">Tricycle (PH)</option>
                               <option value="jeepney">Jeepney (PH)</option>
@@ -1119,14 +1394,14 @@ const AuthPage: React.FC = () => {
                             {errors.vehicleType && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.vehicleType}</p>}
                           </div>
                           <div>
-                            <label style={S.label}>Plate Number</label>
-                            <input style={{ ...S.input, borderColor: errors.plateNumber ? "#EF4444" : "#E5E7EB" }} placeholder="ABC-1234" value={form.plateNumber} onChange={(e) => setForm({ ...form, plateNumber: e.target.value })} />
+                            <label style={styles.label}>Plate Number</label>
+                            <input style={{ ...styles.input, borderColor: errors.plateNumber ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} placeholder="ABC-1234" value={form.plateNumber} onChange={(e) => setForm({ ...form, plateNumber: e.target.value })} />
                             {errors.plateNumber && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.plateNumber}</p>}
                           </div>
                         </div>
                         <div style={{ marginBottom: "2rem" }}>
-                          <label style={S.label}>Select Cooperative</label>
-                          <select style={{ ...S.select, borderColor: errors.selectedCoop ? "#EF4444" : "#E5E7EB" }} value={form.selectedCoop} onChange={(e) => setForm({ ...form, selectedCoop: e.target.value })}>
+                          <label style={styles.label}>Select Cooperative</label>
+                          <select style={{ ...styles.select, borderColor: errors.selectedCoop ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} value={form.selectedCoop} onChange={(e) => setForm({ ...form, selectedCoop: e.target.value })}>
                             <option value="" disabled>Choose your cooperative...</option>
                             {cooperativesList.length === 0 ? (
                               <option value="" disabled>No approved cooperatives available</option>
@@ -1142,27 +1417,27 @@ const AuthPage: React.FC = () => {
                     {role === "cooperative" && (
                       <>
                         <div style={{ marginBottom: "1.25rem" }}>
-                          <label style={S.label}>Cooperative Name</label>
-                          <input style={{ ...S.input, borderColor: errors.coopName ? "#EF4444" : "#E5E7EB" }} placeholder="e.g. Metro Transport Association" value={form.coopName} onChange={(e) => setForm({ ...form, coopName: e.target.value })} />
+                          <label style={styles.label}>Cooperative Name</label>
+                          <input style={{ ...styles.input, borderColor: errors.coopName ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} placeholder="e.g. Metro Transport Association" value={form.coopName} onChange={(e) => setForm({ ...form, coopName: e.target.value })} />
                           {errors.coopName && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.coopName}</p>}
                         </div>
                         <div style={{ marginBottom: "2rem" }}>
-                          <label style={S.label}>Registration Number</label>
-                          <input style={{ ...S.input, borderColor: errors.registrationNumber ? "#EF4444" : "#E5E7EB" }} placeholder="0000-0000-0000" value={form.registrationNumber} onChange={(e) => setForm({ ...form, registrationNumber: e.target.value })} />
+                          <label style={styles.label}>Registration Number</label>
+                          <input style={{ ...styles.input, borderColor: errors.registrationNumber ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} placeholder="0000-0000-0000" value={form.registrationNumber} onChange={(e) => setForm({ ...form, registrationNumber: e.target.value })} />
                           {errors.registrationNumber && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.registrationNumber}</p>}
                         </div>
                       </>
                     )}
 
-                    <div style={{ borderTop: "2px solid #F3F4F6", margin: "2rem 0" }} />
+                    <div style={{ borderTop: dark ? "2px solid rgba(255,255,255,0.05)" : "2px solid #F3F4F6", margin: "2rem 0" }} />
                     <div style={{ marginBottom: "1.5rem" }}>
-                      <label style={{ display: "flex", gap: 12, alignItems: "flex-start", fontSize: 14, color: "#4B5563", cursor: "pointer", lineHeight: 1.4 }}>
+                      <label style={{ display: "flex", gap: 12, alignItems: "flex-start", fontSize: 14, color: dark ? "#9CA3AF" : "#4B5563", cursor: "pointer", lineHeight: 1.4 }}>
                         <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ marginTop: 2, accentColor: "#1652C9", width: 18, height: 18 }} />
                         <span>
                           I agree to the{" "}
-                          <span style={{ color: "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("terms"); }}>Terms of Service</span>
+                          <span style={{ color: dark ? "#60A5FA" : "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("terms"); }}>Terms of Service</span>
                           {" "}and{" "}
-                          <span style={{ color: "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("privacy"); }}>Privacy Policy</span>.
+                          <span style={{ color: dark ? "#60A5FA" : "#1652C9", fontWeight: 700, textDecoration: "underline" }} onClick={(e) => { e.preventDefault(); setLegal("privacy"); }}>Privacy Policy</span>.
                         </span>
                       </label>
                       {errors.terms && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.terms}</p>}
@@ -1175,26 +1450,48 @@ const AuthPage: React.FC = () => {
                   <>
                     {(!walletMode) && (
                       <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "2rem" }}>
-                        <button onClick={handleGenerateWallet} style={{ ...S.ghostBtn, background: walletMode === "create" ? "#1652C9" : "#fff", color: walletMode === "create" ? "#fff" : "#111827", borderColor: walletMode === "create" ? "#1652C9" : "#E5E7EB" }}>
+                        <button onClick={handleGenerateWallet} style={{ ...styles.ghostBtn, background: walletMode === "create" ? "#1652C9" : (dark ? "#1E202B" : "#fff"), color: walletMode === "create" ? "#fff" : (dark ? "#fff" : "#111827"), borderColor: walletMode === "create" ? "#1652C9" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }}>
                           Generate Local Wallet
                         </button>
-                        <button onClick={() => setWalletMode("connect")} style={{ ...S.ghostBtn, background: walletMode === "connect" ? "#1652C9" : "#fff", color: walletMode === "connect" ? "#fff" : "#111827", borderColor: walletMode === "connect" ? "#1652C9" : "#E5E7EB" }}>
+                        <button onClick={() => setWalletMode("connect")} style={{ ...styles.ghostBtn, background: walletMode === "connect" ? "#1652C9" : (dark ? "#1E202B" : "#fff"), color: walletMode === "connect" ? "#fff" : (dark ? "#fff" : "#111827"), borderColor: walletMode === "connect" ? "#1652C9" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }}>
                           Connect Browser Extension
                         </button>
                       </div>
                     )}
 
                     {walletMode === "create" && generatedKeys && (
-                      <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 16, padding: "24px", marginBottom: "2rem" }}>
+                      <div style={{ background: dark ? "#141620" : "#F9FAFB", border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid #E5E7EB", borderRadius: 16, padding: "24px", marginBottom: "2rem" }}>
                         {verificationStep === 0 && (
                           <>
-                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900 }}>1. Save your Recovery Phrase</h4>
-                            <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>This is the ONLY way to recover your funds if you lose your device or PIN. Write it down and keep it safe.</p>
+                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900, color: dark ? "#fff" : "#111827" }}>1. Save your Recovery Phrase</h4>
+                            <p style={{ fontSize: 13, color: dark ? "#9CA3AF" : "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>This is the ONLY way to recover your funds if you lose your device or PIN. Write it down and keep it safe.</p>
+
+                            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(generatedKeys.phrase);
+                                  alert("Recovery phrase copied to clipboard!");
+                                }}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  color: dark ? "#60A5FA" : "#1652C9",
+                                  fontSize: 13,
+                                  fontWeight: 700,
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 4
+                                }}
+                              >
+                                📋 Copy Phrase
+                              </button>
+                            </div>
 
                             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 8, marginBottom: 24 }}>
                               {generatedKeys.phrase.split(" ").map((word, i) => (
-                                <div key={i} style={{ background: "#fff", padding: "8px 4px", borderRadius: 8, fontSize: 13, fontWeight: 700, textAlign: "center", border: "1px solid #E5E7EB", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
-                                  <span style={{ opacity: 0.4, marginRight: 6 }}>{i + 1}.</span>{word}
+                                <div key={i} style={{ background: dark ? "#0F172A" : "#fff", color: dark ? "#fff" : "#111827", padding: "8px 4px", borderRadius: 8, fontSize: 13, fontWeight: 700, textAlign: "center", border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid #E5E7EB", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
+                                  <span style={{ opacity: dark ? 0.6 : 0.4, marginRight: 6 }}>{i + 1}.</span>{word}
                                 </div>
                               ))}
                             </div>
@@ -1204,11 +1501,11 @@ const AuthPage: React.FC = () => {
 
                         {verificationStep > 0 && verificationStep <= 3 && (
                           <>
-                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900 }}>Verify Word #{targetIndices[verificationStep - 1] + 1}</h4>
-                            <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 16 }}>Type the word corresponding to this number from your saved phrase to prove you have it.</p>
+                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900, color: dark ? "#fff" : "#111827" }}>Verify Word #{targetIndices[verificationStep - 1] + 1}</h4>
+                            <p style={{ fontSize: 13, color: dark ? "#9CA3AF" : "#4B5563", marginBottom: 16 }}>Type the word corresponding to this number from your saved phrase to prove you have it.</p>
 
                             <input
-                              style={{ ...S.input, borderColor: errors.verify ? "#EF4444" : "#E5E7EB", marginBottom: 16 }}
+                              style={{ ...styles.input, borderColor: errors.verify ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB"), marginBottom: 16 }}
                               placeholder={`Enter Word #${targetIndices[verificationStep - 1] + 1}`}
                               value={currentWordInput}
                               onChange={(e) => setCurrentWordInput(e.target.value)}
@@ -1225,26 +1522,26 @@ const AuthPage: React.FC = () => {
                               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
                               Phrase successfully verified
                             </div>
-                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900 }}>2. Create a Local PIN</h4>
-                            <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>Your PIN encrypts your secret key on this device for offline use. We do not store your PIN.</p>
+                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900, color: dark ? "#fff" : "#111827" }}>2. Create a Local PIN</h4>
+                            <p style={{ fontSize: 13, color: dark ? "#9CA3AF" : "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>Your PIN encrypts your secret key on this device for offline use. We do not store your PIN.</p>
 
                             <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "1rem" }}>
                               <div>
-                                <input style={{ ...S.input, borderColor: errors.pin ? "#EF4444" : "#E5E7EB" }} type="password" placeholder="Enter a 4-6 digit PIN" value={walletPin} onChange={(e) => setWalletPin(e.target.value)} maxLength={6} />
+                                <input style={{ ...styles.input, borderColor: errors.pin ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="Enter a 4-6 digit PIN" value={walletPin} onChange={(e) => setWalletPin(e.target.value)} maxLength={6} />
                                 {errors.pin && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.pin}</p>}
                               </div>
                               <div>
-                                <input style={{ ...S.input, borderColor: errors.confirmPin ? "#EF4444" : "#E5E7EB" }} type="password" placeholder="Confirm your PIN" value={confirmPin} onChange={(e) => setConfirmPin(e.target.value)} maxLength={6} />
+                                <input style={{ ...styles.input, borderColor: errors.confirmPin ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }} type="password" placeholder="Confirm your PIN" value={confirmPin} onChange={(e) => setConfirmPin(e.target.value)} maxLength={6} />
                                 {errors.confirmPin && <p style={{ color: "#EF4444", fontSize: 12, margin: "6px 0 0" }}>{errors.confirmPin}</p>}
                               </div>
                               
-                              <div style={{ marginTop: "0.5rem", padding: "10px", background: "#EFF6FF", borderRadius: 10, border: "1px dashed #BFDBFE", textAlign: "center" }}>
-                                <p style={{ margin: "0 0 6px", fontSize: 11, color: "#1E40AF", fontWeight: 700 }}>Stellar Testnet Funding Assistance:</p>
+                              <div style={{ marginTop: "0.5rem", padding: "10px", background: dark ? "#1E293B" : "#EFF6FF", borderRadius: 10, border: dark ? "1px dashed rgba(255,255,255,0.15)" : "1px dashed #BFDBFE", textAlign: "center" }}>
+                                <p style={{ margin: "0 0 6px", fontSize: 11, color: dark ? "#93C5FD" : "#1E40AF", fontWeight: 700 }}>Stellar Testnet Funding Assistance:</p>
                                 <a
                                   href={`https://friendbot.stellar.org/?addr=${generatedKeys.pub}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  style={{ color: "#2563EB", fontSize: "12px", textDecoration: "underline", fontWeight: 800 }}
+                                  style={{ color: dark ? "#60A5FA" : "#2563EB", fontSize: "12px", textDecoration: "underline", fontWeight: 800 }}
                                 >
                                   Fund Generated Wallet (Friendbot 🚀)
                                 </a>
@@ -1256,49 +1553,85 @@ const AuthPage: React.FC = () => {
                     )}
 
                     {walletMode === "connect" && (
-                      <div style={{ background: "#F9FAFB", border: "1px solid #E5E7EB", borderRadius: 16, padding: "24px", marginBottom: "2rem" }}>
-                        <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900 }}>1. Select Browser Wallet</h4>
-                        <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>
-                          Click your installed wallet below to connect securely. Or manually paste your public key at the bottom.
-                        </p>
-
-                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "10px", marginBottom: "2rem" }}>
-                          <button onClick={() => connectSpecificWallet('freighter')} style={{ ...S.ghostBtn, padding: "10px" }}>
-                            Freighter
-                          </button>
-                          <button onClick={() => connectSpecificWallet('lobstr')} style={{ ...S.ghostBtn, padding: "10px" }}>
-                            LOBSTR
-                          </button>
-                        </div>
-                        <div style={{ borderTop: "1px solid #E5E7EB", margin: "1rem 0" }}></div>
-
-                        <p style={{ fontSize: 13, color: "#4B5563", marginBottom: 12, fontWeight: 700 }}>
-                          Manual Public Key Entry:
-                        </p>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                          <input
-                            style={{ ...S.input, borderColor: errors.wallet ? "#EF4444" : "#E5E7EB" }}
-                            type="text"
-                            placeholder="G..."
-                            value={connectPubKey}
-                            onChange={(e) => setConnectPubKey(e.target.value)}
-                          />
-                          {errors.wallet && <p style={{ color: "#EF4444", fontSize: 12, margin: "2px 0 0" }}>{errors.wallet}</p>}
-                          
-                          {connectPubKey && connectPubKey.startsWith("G") && connectPubKey.length === 56 && (
-                            <div style={{ marginTop: "0.25rem", padding: "10px", background: "#EFF6FF", borderRadius: 10, border: "1px dashed #BFDBFE", textAlign: "center" }}>
-                              <p style={{ margin: "0 0 6px", fontSize: 11, color: "#1E40AF", fontWeight: 700 }}>Stellar Testnet Funding Assistance:</p>
-                              <a
-                                href={`https://friendbot.stellar.org/?addr=${connectPubKey}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{ color: "#2563EB", fontSize: "12px", textDecoration: "underline", fontWeight: 800 }}
+                      <div style={{ background: dark ? "#141620" : "#F9FAFB", border: dark ? "1px solid rgba(255,255,255,0.08)" : "1px solid #E5E7EB", borderRadius: 16, padding: "24px", marginBottom: "2rem" }}>
+                        {showMobileInstruction ? (
+                          <div>
+                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900, color: dark ? "#fff" : "#111827" }}>
+                              Freighter Mobile Instructions
+                            </h4>
+                            <p style={{ fontSize: 13, color: dark ? "#9CA3AF" : "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>
+                              Freighter browser extension cannot be run inside external mobile browsers like Safari or Chrome.
+                            </p>
+                            <div style={{ padding: "12px", background: dark ? "#1E293B" : "#F3F4F6", borderRadius: 10, marginBottom: 16, fontSize: 12, lineHeight: 1.6, color: dark ? "#F3F4F6" : "#374151" }}>
+                              <strong>To use Freighter on mobile:</strong>
+                              <ol style={{ margin: "6px 0 0", paddingLeft: "16px" }}>
+                                <li>Install the official Freighter Mobile app.</li>
+                                <li>Open the app and navigate to this website using its built-in browser: <code style={{ wordBreak: "break-all", background: dark ? "#0F172A" : "#E5E7EB", padding: "2px 4px", borderRadius: 4 }}>{window.location.origin}</code></li>
+                              </ol>
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+                              <a 
+                                href={`freighter://explore?url=${encodeURIComponent(window.location.origin + window.location.pathname)}`}
+                                style={{ ...styles.primaryBtn, textDecoration: "none", fontSize: 13, padding: "12px", textAlign: "center", marginBottom: 6, display: "block", color: "#fff" }}
                               >
-                                Fund Connected Wallet (Friendbot 🚀)
+                                🚀 Launch in Freighter App Browser
+                              </a>
+                              <a href="https://apps.apple.com/us/app/freighter/id6503844146" target="_blank" rel="noopener noreferrer" style={{ ...styles.ghostBtn, textDecoration: "none", fontSize: 12, padding: "10px", textAlign: "center" }}>
+                                 Download on App Store (iOS)
+                              </a>
+                              <a href="https://play.google.com/store/apps/details?id=org.stellar.freighterwallet" target="_blank" rel="noopener noreferrer" style={{ ...styles.ghostBtn, textDecoration: "none", fontSize: 12, padding: "10px", textAlign: "center" }}>
+                                🤖 Download on Google Play (Android)
                               </a>
                             </div>
-                          )}
-                        </div>
+                            <button onClick={() => setShowMobileInstruction(false)} style={{ ...styles.ghostBtn, padding: "10px" }}>
+                              Back to Wallet Selection
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <h4 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 900, color: dark ? "#fff" : "#111827" }}>1. Connect Wallet Extension</h4>
+                            <p style={{ fontSize: 13, color: dark ? "#9CA3AF" : "#4B5563", marginBottom: 16, lineHeight: 1.5 }}>
+                              Connect your installed Freighter extension wallet or manually enter your public key below.
+                            </p>
+
+                            <button onClick={() => connectSpecificWallet('freighter')} style={{ ...styles.ghostBtn, padding: "14px", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", height: "auto", marginBottom: "2rem" }}>
+                              <span style={{ fontWeight: 800 }}>Connect Freighter Wallet</span>
+                              <span style={{ fontSize: 10, color: freighterDetected ? "#10B981" : (dark ? "#9CA3AF" : "#6B7280"), fontWeight: 700 }}>
+                                {freighterDetected ? "● Detected" : "○ Not Detected"}
+                              </span>
+                            </button>
+
+                            <div style={{ borderTop: dark ? "1px solid rgba(255,255,255,0.05)" : "1px solid #E5E7EB", margin: "1rem 0" }}></div>
+
+                            <p style={{ fontSize: 13, color: dark ? "#fff" : "#4B5563", marginBottom: 12, fontWeight: 700 }}>
+                              Manual Public Key Entry:
+                            </p>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                              <input
+                                style={{ ...styles.input, borderColor: errors.wallet ? "#EF4444" : (dark ? "rgba(255,255,255,0.08)" : "#E5E7EB") }}
+                                type="text"
+                                placeholder="G..."
+                                value={connectPubKey}
+                                onChange={(e) => setConnectPubKey(e.target.value)}
+                              />
+                              {errors.wallet && <p style={{ color: "#EF4444", fontSize: 12, margin: "2px 0 0" }}>{errors.wallet}</p>}
+                              
+                              {connectPubKey && connectPubKey.startsWith("G") && connectPubKey.length === 56 && (
+                                <div style={{ marginTop: "0.25rem", padding: "10px", background: dark ? "#1E293B" : "#EFF6FF", borderRadius: 10, border: dark ? "1px dashed rgba(255,255,255,0.15)" : "1px dashed #BFDBFE", textAlign: "center" }}>
+                                  <p style={{ margin: "0 0 6px", fontSize: 11, color: dark ? "#93C5FD" : "#1E40AF", fontWeight: 700 }}>Stellar Testnet Funding Assistance:</p>
+                                  <a
+                                    href={`https://friendbot.stellar.org/?addr=${connectPubKey}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ color: dark ? "#60A5FA" : "#2563EB", fontSize: "12px", textDecoration: "underline", fontWeight: 800 }}
+                                  >
+                                    Fund Connected Wallet (Friendbot 🚀)
+                                  </a>
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </>

@@ -371,19 +371,19 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, activeTab = "wallet",
           </main>
         </div>
 
-        {/* ── MOBILE BOTTOM NAVIGATION (FIXED TO BOTTOM OF SCREEN) ────────── */}
+        {/* ── MOBILE BOTTOM NAVIGATION (FLOATING NATIVE DOCK) ────────── */}
         {isMobile && (
-          <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, height: 68, background: t.bgHeader, borderTop: `1px solid ${t.border}`, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 100, paddingBottom: "env(safe-area-inset-bottom)", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)" }}>
+          <nav style={{ position: "fixed", bottom: 16, left: 16, right: 16, height: 68, background: t.bgHeader, border: `1px solid ${t.border}`, borderRadius: 24, display: "flex", justifyContent: "space-around", alignItems: "center", zIndex: 100, boxShadow: dark ? "0 12px 40px rgba(0,0,0,0.6)" : "0 12px 40px rgba(0,0,0,0.08)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", overflow: "hidden" }}>
             {/* Role accent stripe top of mobile nav */}
-            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: role === "driver" ? "linear-gradient(90deg, #FF6B00, #FF8833)" : role === "cooperative" ? "linear-gradient(90deg, #10B981, #34D399)" : "linear-gradient(90deg, #FFE600, #FFEE55)" }} />
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: role === "driver" ? "linear-gradient(90deg, #FF6B00, #FF8833)" : role === "cooperative" ? "linear-gradient(90deg, #10B981, #34D399)" : "linear-gradient(90deg, #FFE600, #FFEE55)" }} />
             {dynamicMobileNav.map((item) => {
               const isActive = activeTab === item.key;
               return (
                 <a key={item.key} href={item.href} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, color: isActive ? t.accentText : t.textMuted, textDecoration: "none", fontSize: 10, fontWeight: isActive ? 800 : 600, flex: 1, height: "100%", transition: "all 0.2s", position: "relative" }}>
                   {/* Active indicator dot */}
-                  {isActive && <div style={{ position: "absolute", top: 4, width: 4, height: 4, borderRadius: "50%", background: t.accent }} />}
-                  <span style={{ transform: isActive ? "scale(1.15)" : "scale(1)", transition: "transform 0.25s cubic-bezier(0.16,1,0.3,1)", marginTop: 8 }}>{item.icon}</span>
-                  <span style={{ letterSpacing: "0.03em" }}>{item.label}</span>
+                  {isActive && <div style={{ position: "absolute", bottom: 6, width: 4, height: 4, borderRadius: "50%", background: t.accent }} />}
+                  <span style={{ transform: isActive ? "scale(1.15) translateY(-2px)" : "scale(1)", transition: "transform 0.25s cubic-bezier(0.16,1,0.3,1)", marginTop: isActive ? 2 : 6 }}>{item.icon}</span>
+                  <span style={{ letterSpacing: "0.03em", opacity: isActive ? 1 : 0.8 }}>{item.label}</span>
                 </a>
               );
             })}

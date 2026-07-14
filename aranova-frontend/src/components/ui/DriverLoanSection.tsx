@@ -24,8 +24,6 @@ import {
 } from "../../services/sorobanService";
 import CryptoJS from "crypto-js";
 import { FreighterModule } from "@creit.tech/stellar-wallets-kit/modules/freighter";
-import { xBullModule } from "@creit.tech/stellar-wallets-kit/modules/xbull";
-import { LobstrModule } from "@creit.tech/stellar-wallets-kit/modules/lobstr";
 
 const getSigningHandler = async (userData: any, networkPassphrase: string) => {
   if (userData.encryptedSecretKey) {
@@ -41,13 +39,27 @@ const getSigningHandler = async (userData: any, networkPassphrase: string) => {
       throw err;
     }
   } else {
-    const walletId = userData.network?.toLowerCase() || "freighter";
+    const walletId = userData.walletType?.toLowerCase() || "freighter";
     let module: any;
-    if (walletId.includes("xbull")) module = new xBullModule();
-    else if (walletId.includes("lobstr")) module = new LobstrModule();
-    else module = new FreighterModule();
-    const isAvailable = await module.isAvailable();
-    if (!isAvailable) throw new Error(`${walletId.toUpperCase()} wallet is not available/detected.`);
+    if (walletId.includes("freighter")) {
+      module = new FreighterModule();
+    } else {
+      module = new FreighterModule();
+    }
+    
+    let isAvailable = false;
+    const win = window as any;
+    if (win.freighterApi || win.stellar?.isFreighter) {
+      isAvailable = true;
+    } else {
+      try {
+        isAvailable = await module.isAvailable();
+      } catch (e) {
+        isAvailable = false;
+      }
+    }
+    if (!isAvailable) throw new Error("Stellar Freighter Wallet is not available or disabled.");
+    
     return {
       signWithWallet: async (xdr: string) =>
         await module.signTransaction(xdr, { networkPassphrase, publicKey: userData.publicKey }),
@@ -337,8 +349,8 @@ const DriverLoanSection: React.FC<DriverLoanSectionProps> = ({ userData, dark })
                 type="number"
                 placeholder="Enter XLM value"
                 className={`w-full px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-[#FF6B00] ${
-                  dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-200 text-gray-900'
-                }`}
+                  dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-400' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500'
+                } premium-input`}
               />
               <p className="text-[10px] text-gray-500 mt-1">Your Trust Score Guideline Limit: <span className="text-emerald-500 font-bold">{formatXlm(creditLimit)} XLM</span> (You can request any amount; the Admin reviews and sets approvals dynamically.)</p>
             </div>
@@ -395,6 +407,9 @@ const DriverLoanSection: React.FC<DriverLoanSectionProps> = ({ userData, dark })
                 } else if (isRepaid) {
                   bg = dark ? 'bg-green-500/10 border-green-500/20' : 'bg-green-50 border-green-200';
                   statusLabel = "Repaid";
+                } else if (isWrittenOff) {
+                  bg = dark ? 'bg-red-950/20 border-red-900/40' : 'bg-red-50 border-red-200';
+                  statusLabel = "Written Off";
                 } else {
                   bg = dark ? 'bg-red-500/5 border-red-500/20' : 'bg-red-50 border-red-200';
                 }

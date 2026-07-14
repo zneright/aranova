@@ -263,7 +263,7 @@ const UserReceive: React.FC = () => {
         </div>
 
         {/* QR Code Container */}
-        <div className={`mt-8 p-8 rounded-[36px] border ${dark ? "bg-[#141620] border-white/10" : "bg-white border-gray-100 shadow-xl"}`}>
+        <div className={`mt-8 p-8 rounded-[36px] border premium-shadow ${dark ? "bg-[#12141D] border-white/5" : "bg-white border-gray-150"}`}>
           <div className="mb-2">
             <span className={`inline-block px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
               role === "driver" ? "bg-[#FF6B00]/10 text-[#FF6B00]" : role === "cooperative" ? "bg-[#10B981]/10 text-[#10B981]" : "bg-[#FFE600]/20 text-[#B8A000]"
@@ -331,8 +331,8 @@ const UserReceive: React.FC = () => {
         </div>
 
         {showReceiptModal && receiptData && (
-          <div className="fixed inset-0 bg-black/95 backdrop-blur-md flex items-center justify-center z-[9999] p-6 animate-fadeIn">
-            <div className={`rounded-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
+          <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center z-[9999] p-0 sm:p-6 animate-fadeIn">
+            <div className={`bottom-sheet sm:rounded-[32px] rounded-t-[32px] p-6 max-w-sm w-full border shadow-2xl text-center ${dark ? "bg-[#0E0F14] border-white/10 text-white" : "bg-white border-gray-100 text-gray-900"}`}>
               <div className="w-16 h-16 bg-[#10B981]/20 text-[#10B981] rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>

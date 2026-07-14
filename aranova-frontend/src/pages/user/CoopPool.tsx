@@ -18,8 +18,6 @@ import {
 } from "../../services/sorobanService";
 import CryptoJS from "crypto-js";
 import { FreighterModule } from "@creit.tech/stellar-wallets-kit/modules/freighter";
-import { xBullModule } from "@creit.tech/stellar-wallets-kit/modules/xbull";
-import { LobstrModule } from "@creit.tech/stellar-wallets-kit/modules/lobstr";
 
 const getSigningHandler = async (userData: any, networkPassphrase: string) => {
   if (userData.encryptedSecretKey) {
@@ -30,12 +28,28 @@ const getSigningHandler = async (userData: any, networkPassphrase: string) => {
     if (!secret || !secret.startsWith("S")) throw new Error("Invalid PIN.");
     return { signWithSecret: secret };
   }
-  const walletId = userData.network?.toLowerCase() || "freighter";
+  const walletId = userData.walletType?.toLowerCase() || "freighter";
   let module: any;
-  if (walletId.includes("xbull")) module = new xBullModule();
-  else if (walletId.includes("lobstr")) module = new LobstrModule();
-  else module = new FreighterModule();
-  if (!(await module.isAvailable())) throw new Error("Wallet not available.");
+  if (walletId.includes("freighter")) {
+    module = new FreighterModule();
+  } else {
+    module = new FreighterModule();
+  }
+
+  let isAvailable = false;
+  const win = window as any;
+  if (win.freighterApi || win.stellar?.isFreighter) {
+    isAvailable = true;
+  } else {
+    try {
+      isAvailable = await module.isAvailable();
+    } catch (e) {
+      isAvailable = false;
+    }
+  }
+
+  if (!isAvailable) throw new Error("Stellar Freighter Wallet is not available or disabled.");
+
   return {
     signWithWallet: async (xdr: string) =>
       await module.signTransaction(xdr, { networkPassphrase, publicKey: userData.publicKey }),
@@ -180,7 +194,7 @@ const CoopPool = () => {
   const card = dark ? "bg-[#0A1128] border-white/5" : "bg-white border-[#D5E2EC]";
   const muted = dark ? "text-gray-500" : "text-gray-400";
   const heading = dark ? "text-white" : "text-gray-900";
-  const input = `w-full px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#10B981]/40 transition-all ${dark ? "bg-white/5 border-white/8 text-white placeholder-gray-600" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`;
+  const input = `w-full px-4 py-3 rounded-xl border text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-[#10B981]/40 transition-all ${dark ? "bg-white/5 border-white/8 text-white placeholder-gray-400" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500"}`;
   const divider = dark ? "divide-white/5" : "divide-gray-100";
 
   return (
@@ -359,7 +373,7 @@ const CoopPool = () => {
                             type="number"
                             placeholder="XLM to allocate"
                             min="0"
-                            className={`flex-1 px-3 py-2 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#10B981] ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-600' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'}`}
+                            className={`flex-1 px-3 py-2 rounded-xl border text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-[#10B981] ${dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-400' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500'}`}
                             id={`alloc-${d.uid}`}
                           />
                           <button

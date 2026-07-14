@@ -48,7 +48,7 @@ impl FuelCreditContract {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::TrustContract, &trust_contract);
-        env.storage().instance().set(&DataKey::InterestSplit, &4000); // 40% default admin share
+        env.storage().instance().set(&DataKey::InterestSplit, &4000i128); // 40% default admin share
     }
 
     pub fn set_interest_split(env: Env, admin_share_bps: i128) {
@@ -167,20 +167,11 @@ impl FuelCreditContract {
     pub fn repay_credit(env: Env, driver: Address, token: Address) {
         driver.require_auth();
 
-        #[cfg(test)]
-        extern crate std;
-
-        #[cfg(test)]
-        std::println!("repay_credit: STATION A - starting");
-
         let loan: LoanRecord = env.storage().persistent().get(&DataKey::Loan(driver.clone()))
             .unwrap_or_else(|| panic!("no active loan found"));
         
         let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         let trust_contract_address: Address = env.storage().instance().get(&DataKey::TrustContract).unwrap();
-
-        #[cfg(test)]
-        std::println!("repay_credit: STATION B - interest calc");
 
         // Calculate dynamic interest based on interest_rate_bps (annualized)
         let interest = (loan.principal * loan.interest_rate_bps * loan.duration_days as i128) / (10_000 * 365);
@@ -190,30 +181,20 @@ impl FuelCreditContract {
         let total_due = loan.principal + interest;
 
         let client = token::Client::new(&env, &token);
-        #[cfg(test)]
-        std::println!("repay_credit: STATION C - transfer from driver: total_due = {}", total_due);
         client.transfer(&driver, &env.current_contract_address(), &total_due);
         
-        #[cfg(test)]
-        std::println!("repay_credit: STATION D - transfer to admin: admin_fee = {}", admin_fee);
         if admin_fee > 0 {
             client.transfer(&env.current_contract_address(), &admin, &admin_fee);
         }
-        #[cfg(test)]
-        std::println!("repay_credit: STATION E - transfer to coop: coop_fee = {}", coop_fee);
         if coop_fee > 0 {
             client.transfer(&env.current_contract_address(), &loan.coop, &coop_fee);
         }
 
-        #[cfg(test)]
-        std::println!("repay_credit: STATION F - storage updates");
         let mut pool = env.storage().persistent().get(&DataKey::Pool(loan.coop.clone())).unwrap_or(0);
         pool += loan.principal;
         env.storage().persistent().set(&DataKey::Pool(loan.coop.clone()), &pool);
         env.storage().persistent().remove(&DataKey::Loan(driver.clone()));
 
-        #[cfg(test)]
-        std::println!("repay_credit: STATION G - checking ledger time");
         // Check if repayment is on-time or late
         let now = env.ledger().timestamp();
         let due_time = loan.disbursed_at + (loan.duration_days as u64 * 24 * 60 * 60);

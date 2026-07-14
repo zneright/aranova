@@ -20,8 +20,6 @@ import { db, auth } from "../../firebase/config";
 import AdminLayout, { useAdminTheme, useAdminPage } from "../../components/layout/AdminLayout";
 import AdminLoans from "../../components/admin/AdminLoans";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 
 
 // ─── DATA SCHEMAS & INTERFACES ──────────────────────────────────────────────
@@ -107,14 +105,14 @@ const OverviewTab: React.FC<{
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <div>
-          <h1 className="text-3xl font-black tracking-tight">System Overview</h1>
+          <h1 className="text-2xl sm:text-3xl font-black tracking-tight">System Overview</h1>
           <p className="text-xs text-gray-500 mt-1">Logged in as: <span className="font-bold text-blue-500">{currentAdminEmail}</span> ({currentAdminRole === "super" ? "Super Admin" : "Regular Admin"})</p>
         </div>
         <button
           onClick={onRefresh}
-          className={`text-xs font-bold px-4 py-2 rounded-xl transition-all ${dark ? "bg-blue-600/20 text-blue-400 border border-blue-500/20 hover:bg-blue-600/30" : "bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100"
+          className={`self-start sm:self-auto text-xs font-bold px-4 py-2 rounded-xl transition-all ${dark ? "bg-blue-600/20 text-blue-400 border border-blue-500/20 hover:bg-blue-600/30" : "bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100"
             }`}
         >
           Refresh System Stats
@@ -147,12 +145,13 @@ const OverviewTab: React.FC<{
 
       {/* Pending Applications Section */}
       <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-        <div className={`px-6 py-5 border-b flex justify-between items-center ${dark ? "border-white/10 bg-[#1A1D2E]" : "border-gray-200 bg-gray-50"}`}>
-          <h3 className="font-extrabold text-[16px]">Pending Onboarding Registrations</h3>
-          <span className="text-xs opacity-60">Requires verification of security details</span>
+        <div className={`px-4 sm:px-6 py-4 sm:py-5 border-b ${dark ? "border-white/10 bg-[#1A1D2E]" : "border-gray-200 bg-gray-50"}`}>
+          <h3 className="font-extrabold text-[15px] sm:text-[16px]">Pending Onboarding Registrations</h3>
+          <p className="text-xs opacity-60 mt-0.5">Requires verification of security details</p>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -181,13 +180,9 @@ const OverviewTab: React.FC<{
                     </td>
                     <td className="p-4">
                       {user.role === "cooperative" ? (
-                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">
-                          Cooperative
-                        </span>
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">Cooperative</span>
                       ) : (
-                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          Driver
-                        </span>
+                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">Driver</span>
                       )}
                     </td>
                     <td className="p-4">
@@ -205,20 +200,8 @@ const OverviewTab: React.FC<{
                     </td>
                     <td className="p-4 text-right">
                       <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => onApprove(user.id)}
-                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-green-600/20 hover:bg-green-600/40 text-green-400 border border-green-600/30" : "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
-                            }`}
-                        >
-                          Approve Profile
-                        </button>
-                        <button
-                          onClick={() => onDecline(user.id)}
-                          className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
-                            }`}
-                        >
-                          Decline Request
-                        </button>
+                        <button onClick={() => onApprove(user.id)} className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-green-600/20 hover:bg-green-600/40 text-green-400 border border-green-600/30" : "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"}`}>Approve Profile</button>
+                        <button onClick={() => onDecline(user.id)} className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"}`}>Decline Request</button>
                       </div>
                     </td>
                   </tr>
@@ -226,6 +209,58 @@ const OverviewTab: React.FC<{
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Stacked Card View */}
+        <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+          {loading ? (
+            <div className="p-8 text-center text-gray-500 font-medium">Fetching registry payload...</div>
+          ) : pendingUsers.length === 0 ? (
+            <div className="p-8 text-center text-gray-500 font-medium">No registrations currently pending validation.</div>
+          ) : (
+            pendingUsers.map((user) => (
+              <div key={user.id} className="p-4 space-y-3">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-[15px] truncate">{user.displayName}</div>
+                    <div className="text-xs opacity-60 mt-0.5 truncate">{user.email}</div>
+                    {user.phone && <div className="text-xs opacity-60 mt-0.5">{user.phone}</div>}
+                  </div>
+                  {user.role === "cooperative" ? (
+                    <span className="flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">Cooperative</span>
+                  ) : (
+                    <span className="flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">Driver</span>
+                  )}
+                </div>
+                <div className={`p-3 rounded-xl text-xs space-y-1 ${dark ? "bg-white/5" : "bg-gray-50"}`}>
+                  {user.role === "cooperative" ? (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="opacity-60">CDA/SEC Reg:</span>
+                        <span className="font-semibold">{user.registrationNumber || "N/A"}</span>
+                      </div>
+                      <div className="text-[10px] opacity-50">Stellar Public Vault Authorized</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="opacity-60">Vehicle:</span>
+                        <span className="font-semibold capitalize">{user.vehicleType || "Tricycle"} — {user.plateNumber || "N/A"}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="opacity-60">Coop ID:</span>
+                        <span className="font-semibold">{user.cooperativeId || "N/A"}</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => onApprove(user.id)} className={`py-2.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-green-600/20 text-green-400 border border-green-600/30" : "bg-green-50 text-green-700 border border-green-200"}`}>Approve Profile</button>
+                  <button onClick={() => onDecline(user.id)} className={`py-2.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 text-red-400 border border-red-600/30" : "bg-red-50 text-red-700 border border-red-200"}`}>Decline Request</button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -392,20 +427,20 @@ const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-black">Members Registry</h1>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+        <h1 className="text-2xl sm:text-3xl font-black">Members Registry</h1>
         <input
           type="text"
           placeholder="Filter members..."
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className={`px-4 py-2 rounded-xl border text-sm font-semibold ${dark ? "bg-[#141722] border-white/10 text-white" : "bg-white border-gray-200 text-gray-900"
-            }`}
+          className={`w-full sm:w-auto px-4 py-2 rounded-xl border text-sm font-semibold ${dark ? "bg-[#141722] border-white/10 text-white" : "bg-white border-gray-200 text-gray-900"}`}
         />
       </div>
 
       <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-        <div className="overflow-x-auto">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[700px]">
             <thead>
               <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -418,9 +453,7 @@ const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
             </thead>
             <tbody className="text-sm">
               {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">No matching members found.</td>
-                </tr>
+                <tr><td colSpan={5} className="p-8 text-center text-gray-500">No matching members found.</td></tr>
               ) : (
                 filtered.map((m, idx) => (
                   <tr key={idx} className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
@@ -429,24 +462,51 @@ const MembersTab: React.FC<{ users: UserProfile[] }> = ({ users }) => {
                       <div className="text-xs opacity-50 mt-0.5">{m.email}</div>
                     </td>
                     <td className="p-4">
-                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${m.role === "cooperative" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : m.role === "driver" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
-                        }`}>
-                        {m.role}
-                      </span>
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${m.role === "cooperative" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : m.role === "driver" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>{m.role}</span>
                     </td>
                     <td className="p-4 font-mono text-xs opacity-60">{m.publicKey ? `${m.publicKey.substring(0, 8)}...${m.publicKey.substring(m.publicKey.length - 8)}` : "Not Initialized"}</td>
                     <td className="p-4 font-bold">{m.trustScore ?? 0}</td>
                     <td className="p-4 text-right">
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${m.approved ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
-                        }`}>
-                        {m.approved ? "Active" : "Pending Approval"}
-                      </span>
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${m.approved ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-amber-500/10 text-amber-400 border border-amber-500/20"}`}>{m.approved ? "Active" : "Pending Approval"}</span>
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Stacked Card View */}
+        <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+          {filtered.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No matching members found.</div>
+          ) : (
+            filtered.map((m, idx) => (
+              <div key={idx} className="p-4 space-y-3">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-[15px] truncate">{m.displayName}</div>
+                    <div className="text-xs opacity-50 mt-0.5 truncate">{m.email}</div>
+                  </div>
+                  <span className={`flex-shrink-0 px-2.5 py-0.5 rounded-full text-xs font-bold ${m.role === "cooperative" ? "bg-purple-500/10 text-purple-400 border border-purple-500/20" : m.role === "driver" ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" : "bg-blue-500/10 text-blue-400 border border-blue-500/20"}`}>{m.role}</span>
+                </div>
+                <div className={`p-3 rounded-xl text-xs space-y-2 ${dark ? "bg-white/5" : "bg-gray-50"}`}>
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Stellar Wallet:</span>
+                    <span className="font-mono font-bold">{m.publicKey ? `${m.publicKey.substring(0, 8)}...${m.publicKey.substring(m.publicKey.length - 6)}` : "Not Initialized"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Trust Score:</span>
+                    <span className="font-bold">{m.trustScore ?? 0}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="opacity-60">Status:</span>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${m.approved ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-amber-500/10 text-amber-400 border border-amber-500/20"}`}>{m.approved ? "Active" : "Pending Approval"}</span>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>
@@ -522,10 +582,11 @@ const VaultsTab: React.FC<{
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      <h1 className="text-3xl font-black">Soroban Collateral Vaults</h1>
+      <h1 className="text-2xl sm:text-3xl font-black">Soroban Collateral Vaults</h1>
 
       <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-        <div className="overflow-x-auto">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[800px]">
             <thead>
               <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -538,9 +599,7 @@ const VaultsTab: React.FC<{
             </thead>
             <tbody className="text-sm">
               {vaults.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="p-8 text-center text-gray-500">No locked Soroban vaults found.</td>
-                </tr>
+                <tr><td colSpan={5} className="p-8 text-center text-gray-500">No locked Soroban vaults found.</td></tr>
               ) : (
                 vaults.map(v => {
                   const health = getVaultHealth(v);
@@ -552,34 +611,18 @@ const VaultsTab: React.FC<{
                       </td>
                       <td className="p-4 font-bold">${Number(v.lockedAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} XLM</td>
                       <td className="p-4">
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${v.status === "locked" ? "bg-blue-500/15 text-blue-400" : "bg-red-500/15 text-red-400"
-                          }`}>
-                          {v.status}
-                        </span>
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${v.status === "locked" ? "bg-blue-500/15 text-blue-400" : "bg-red-500/15 text-red-400"}`}>{v.status}</span>
                       </td>
                       <td className="p-4">
-                        <span className={`font-black ${health >= 1 ? "text-green-500" : "text-red-500"}`}>
-                          {health === 99.0 ? "∞" : health.toFixed(2)}
-                        </span>
+                        <span className={`font-black ${health >= 1 ? "text-green-500" : "text-red-500"}`}>{health === 99.0 ? "∞" : health.toFixed(2)}</span>
                       </td>
                       <td className="p-4 text-right">
                         {v.status === "liquidated" ? (
-                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/20">
-                            Liquidated (Default Reconciled)
-                          </span>
+                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/20">Liquidated</span>
                         ) : health < 1.0 ? (
-                          <button
-                            onClick={() => triggerLiquidation(v)}
-                            disabled={liquidatingId !== null}
-                            className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
-                              }`}
-                          >
-                            {liquidatingId === v.id ? "Clearing Vault..." : "Trigger On-Chain Liquidation"}
-                          </button>
+                          <button onClick={() => triggerLiquidation(v)} disabled={liquidatingId !== null} className={`px-4 py-1.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30" : "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"}`}>{liquidatingId === v.id ? "Clearing..." : "Trigger Liquidation"}</button>
                         ) : (
-                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-500 border border-green-500/20">
-                            Healthy Standby
-                          </span>
+                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-500 border border-green-500/20">Healthy Standby</span>
                         )}
                       </td>
                     </tr>
@@ -588,6 +631,47 @@ const VaultsTab: React.FC<{
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Stacked Card View */}
+        <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+          {vaults.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No locked Soroban vaults found.</div>
+          ) : (
+            vaults.map(v => {
+              const health = getVaultHealth(v);
+              return (
+                <div key={v.id} className="p-4 space-y-3">
+                  <div className="flex justify-between items-start gap-2">
+                    <div>
+                      <div className="font-bold text-[15px]">{getVaultOwnerName(v.ownerId)}</div>
+                      <div className="font-mono text-[10px] opacity-50 mt-0.5">{v.id.substring(0, 12)}...</div>
+                    </div>
+                    <span className={`flex-shrink-0 px-2.5 py-0.5 rounded-full text-xs font-bold capitalize ${v.status === "locked" ? "bg-blue-500/15 text-blue-400" : "bg-red-500/15 text-red-400"}`}>{v.status}</span>
+                  </div>
+                  <div className={`p-3 rounded-xl text-xs space-y-2 ${dark ? "bg-white/5" : "bg-gray-50"}`}>
+                    <div className="flex justify-between">
+                      <span className="opacity-60">Locked Collateral:</span>
+                      <span className="font-bold">${Number(v.lockedAmount || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })} XLM</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="opacity-60">Health Factor:</span>
+                      <span className={`font-black ${health >= 1 ? "text-green-500" : "text-red-500"}`}>{health === 99.0 ? "∞" : health.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    {v.status === "liquidated" ? (
+                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/20">Liquidated (Default Reconciled)</span>
+                    ) : health < 1.0 ? (
+                      <button onClick={() => triggerLiquidation(v)} disabled={liquidatingId !== null} className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-red-600/20 text-red-400 border border-red-600/30" : "bg-red-50 text-red-700 border border-red-200"}`}>{liquidatingId === v.id ? "Clearing Vault..." : "Trigger On-Chain Liquidation"}</button>
+                    ) : (
+                      <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-500/10 text-green-500 border border-green-500/20">Healthy Standby</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
@@ -641,10 +725,11 @@ const DisputesTab = () => {
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      <h1 className="text-3xl font-black">Liquidation Disputes</h1>
+      <h1 className="text-2xl sm:text-3xl font-black">Liquidation Disputes</h1>
 
       <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-        <div className="overflow-x-auto">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[700px]">
             <thead>
               <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -656,22 +741,34 @@ const DisputesTab = () => {
             <tbody className="text-sm">
               <tr className={`border-b transition-colors ${dark ? "border-white/10 hover:bg-white/5" : "border-gray-100 hover:bg-gray-50"}`}>
                 <td className="p-4 font-bold text-[15px]">Nguyen Van A</td>
-                <td className="p-4 text-sm leading-relaxed opacity-80">
-                  "Stuck offline Bluetooth sync. Capturing transaction took 4 days due to signal loss, resulting in unexpected default trigger."
-                </td>
+                <td className="p-4 text-sm leading-relaxed opacity-80">"Stuck offline Bluetooth sync. Capturing transaction took 4 days due to signal loss, resulting in unexpected default trigger."</td>
                 <td className="p-4 text-right">
                   <div className="flex justify-end gap-2">
-                    <button className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-green-500/20 text-green-400 border border-green-500/20 hover:bg-green-500/30">
-                      Approve Grace Extension
-                    </button>
-                    <button className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-red-500/20 text-red-400 border border-red-500/20 hover:bg-red-500/30">
-                      Reject Override
-                    </button>
+                    <button className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-green-500/20 text-green-400 border border-green-500/20 hover:bg-green-500/30">Approve Grace Extension</button>
+                    <button className="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-red-500/20 text-red-400 border border-red-500/20 hover:bg-red-500/30">Reject Override</button>
                   </div>
                 </td>
               </tr>
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Stacked Card View */}
+        <div className="block md:hidden p-4 space-y-3">
+          <div className="flex justify-between items-start gap-2">
+            <div>
+              <div className="font-bold text-[15px]">Nguyen Van A</div>
+              <div className="text-[10px] font-black uppercase text-amber-400 mt-0.5">Dispute Filed</div>
+            </div>
+            <span className="flex-shrink-0 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/20">Pending</span>
+          </div>
+          <div className={`p-3 rounded-xl text-xs leading-relaxed opacity-80 ${dark ? "bg-white/5" : "bg-gray-50"}`}>
+            "Stuck offline Bluetooth sync. Capturing transaction took 4 days due to signal loss, resulting in unexpected default trigger."
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button className="py-2.5 rounded-xl text-xs font-bold bg-green-500/20 text-green-400 border border-green-500/20 active:scale-95 transition-all">Approve Grace Extension</button>
+            <button className="py-2.5 rounded-xl text-xs font-bold bg-red-500/20 text-red-400 border border-red-500/20 active:scale-95 transition-all">Reject Override</button>
+          </div>
         </div>
       </div>
     </div>
@@ -710,11 +807,14 @@ const AuditTrailTab: React.FC<{ auditLogs: AuditLog[] }> = ({ auditLogs }) => {
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      <h1 className="text-3xl font-black">System Audit Trail</h1>
-      <p className="text-xs text-gray-500 mt-1">This audit log records operations executed exclusively by system administrators.</p>
+      <div>
+        <h1 className="text-2xl sm:text-3xl font-black">System Audit Trail</h1>
+        <p className="text-xs text-gray-500 mt-1">This audit log records operations executed exclusively by system administrators.</p>
+      </div>
 
       <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-        <div className="overflow-x-auto">
+        {/* Desktop Table View */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse min-w-[700px]">
             <thead>
               <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -726,9 +826,7 @@ const AuditTrailTab: React.FC<{ auditLogs: AuditLog[] }> = ({ auditLogs }) => {
             </thead>
             <tbody className="text-sm">
               {auditLogs.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="p-8 text-center text-gray-500">No admin audit logs recorded.</td>
-                </tr>
+                <tr><td colSpan={4} className="p-8 text-center text-gray-500">No admin audit logs recorded.</td></tr>
               ) : (
                 auditLogs.map((log) => {
                   const dateStr = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleString() : "Just now";
@@ -744,6 +842,27 @@ const AuditTrailTab: React.FC<{ auditLogs: AuditLog[] }> = ({ auditLogs }) => {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Mobile Stacked Card View */}
+        <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+          {auditLogs.length === 0 ? (
+            <div className="p-8 text-center text-gray-500">No admin audit logs recorded.</div>
+          ) : (
+            auditLogs.map((log) => {
+              const dateStr = log.createdAt?.toDate ? log.createdAt.toDate().toLocaleString() : "Just now";
+              return (
+                <div key={log.id} className="p-4 space-y-2">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-extrabold text-xs text-blue-500 flex-1">{log.action}</span>
+                    <span className="font-mono text-[10px] opacity-50 flex-shrink-0">{dateStr}</span>
+                  </div>
+                  <div className="text-xs opacity-60 truncate">{log.adminEmail}</div>
+                  <div className={`p-2.5 rounded-lg text-xs opacity-80 leading-relaxed ${dark ? "bg-white/5" : "bg-gray-50"}`}>{log.details}</div>
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>
@@ -1061,6 +1180,39 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
     fetchConfig();
   }, [currentAdminEmail]);
 
+  const getAdminSigningHandler = async (publicKey: string) => {
+    const modules = [new FreighterModule()];
+    let activeModule: any = null;
+
+    const win = window as any;
+    if (win.freighterApi || win.stellar?.isFreighter) {
+      activeModule = modules[0];
+    } else {
+      for (const mod of modules) {
+        try {
+          if (await mod.isAvailable()) {
+            activeModule = mod;
+            break;
+          }
+        } catch (e) { }
+      }
+    }
+
+    if (!activeModule) {
+      throw new Error("No Stellar wallet extension detected. Please install Freighter.");
+    }
+
+    return {
+      signWithWallet: async (xdr: string) => {
+        const { NETWORK_PASSPHRASE } = await import("../../services/sorobanService");
+        return await activeModule.signTransaction(xdr, {
+          networkPassphrase: NETWORK_PASSPHRASE,
+          publicKey: publicKey,
+        });
+      },
+    };
+  };
+
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setToast("Publishing configurations to database & sync'ing on-chain...");
@@ -1087,21 +1239,22 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
 
       // 2. Synchronize parameters on-chain via smart contracts
       try {
-        const signingSecret = localStorage.getItem(`aranova_wallet_secret_admin`) || localStorage.getItem(`aranova_wallet_secret_${auth.currentUser?.uid}`);
-        if (signingSecret) {
+        const pubKey = disbursalAddress || connectedWallets[0];
+        if (pubKey) {
           const { setTrustRulesOnChain } = await import("../../services/sorobanService");
+          const signingHandler = await getAdminSigningHandler(pubKey);
           // Update Trust scoring weights on-chain
           await setTrustRulesOnChain(
-            disbursalAddress || connectedWallets[0],
+            pubKey,
             {
               on_time_repayment_bonus: BigInt(trustRepaymentBonus),
               vault_maturity_bonus: BigInt(trustMaturityBonus),
               loan_completed_bonus: BigInt(trustLoanCompletedBonus),
               late_payment_penalty: BigInt(trustLatePenalty),
               default_penalty: BigInt(trustDefaultPenalty),
-              early_vault_unlock_penalty: BigInt(trustEarlyUnlockPenalty),
+              early_unlock_penalty: BigInt(trustEarlyUnlockPenalty),
             },
-            { signWithSecret: signingSecret }
+            signingHandler
           );
         }
       } catch (chainErr) {
@@ -1122,28 +1275,29 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
     }
   };
 
-  const [showWalletSelector, setShowWalletSelector] = useState(false);
 
-  const connectSpecificWallet = async (walletId: string) => {
+
+  const connectSpecificWallet = async (walletId: string = "freighter") => {
     setConnecting(true);
-    setToast(`Scanning for ${walletId.toUpperCase()} extension credentials...`);
+    setToast(`Scanning for Freighter extension credentials...`);
     try {
       let walletModule: any;
       if (walletId === 'freighter') {
         walletModule = new FreighterModule();
-      } else if (walletId === 'xbull') {
-        walletModule = new xBullModule();
-      } else if (walletId === 'lobstr') {
-        walletModule = new LobstrModule();
       }
 
       if (!walletModule) throw new Error("Wallet module failed to initialize.");
 
       let isAvailable = false;
-      try {
-        isAvailable = await walletModule.isAvailable();
-      } catch (err) {
-        isAvailable = false;
+      const win = window as any;
+      if (walletId === 'freighter' && (win.freighterApi || win.stellar?.isFreighter)) {
+        isAvailable = true;
+      } else {
+        try {
+          isAvailable = await walletModule.isAvailable();
+        } catch (err) {
+          isAvailable = false;
+        }
       }
 
       if (!isAvailable) {
@@ -1189,7 +1343,6 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
       });
 
       setToast(`Success! Linked ${walletId.toUpperCase()} account: ${address}`);
-      setShowWalletSelector(false);
     } catch (err: any) {
       console.warn("Wallet connection failed:", err);
       try {
@@ -1242,49 +1395,22 @@ const SettingsTab: React.FC<{ currentAdminEmail: string }> = ({ currentAdminEmai
                 )}
               </div>
 
-              {!showWalletSelector ? (
+              {!connecting ? (
                 <button
                   type="button"
-                  onClick={() => setShowWalletSelector(true)}
+                  onClick={() => connectSpecificWallet('freighter')}
                   disabled={connecting}
                   className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold rounded-xl text-xs active:scale-95 transition-all"
                 >
-                  {connecting ? "Connecting..." : "+ Connect New Stellar Wallet Account"}
+                  + Connect Freighter Wallet Account
                 </button>
               ) : (
-                <div className="space-y-2 p-3 rounded-xl border border-white/5 bg-[#0E1016]">
-                  <p className="text-[10px] uppercase font-bold tracking-wider opacity-50 mb-1">Select Wallet Extension</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => connectSpecificWallet('freighter')}
-                      className="py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition-all"
-                    >
-                      Freighter
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => connectSpecificWallet('xbull')}
-                      className="py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition-all"
-                    >
-                      xBull
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => connectSpecificWallet('lobstr')}
-                      className="py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg transition-all"
-                    >
-                      Lobstr
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowWalletSelector(false)}
-                    className="w-full mt-2 py-1.5 border border-white/10 hover:bg-white/5 text-gray-400 text-[11px] font-bold rounded-lg transition-all"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                <button
+                  disabled
+                  className="w-full py-2.5 bg-blue-600/50 text-white/50 font-extrabold rounded-xl text-xs"
+                >
+                  Connecting...
+                </button>
               )}
             </div>
 

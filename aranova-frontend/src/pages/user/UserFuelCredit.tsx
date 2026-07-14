@@ -280,9 +280,9 @@ const UserFuelCredit: React.FC = () => {
               aria-label="Fuel credit request amount in XLM"
               className={`flex-1 px-4 py-3 rounded-xl text-sm font-semibold border outline-none ${
                 dark
-                  ? 'bg-white/5 border-white/10 text-white placeholder-gray-600'
-                  : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400'
-              }`}
+                  ? 'bg-white/5 border-white/10 text-white placeholder-gray-400'
+                  : 'bg-white border-gray-200 text-gray-900 placeholder-gray-500'
+              } premium-input`}
             />
             <button
               onClick={handleRequestCredit}

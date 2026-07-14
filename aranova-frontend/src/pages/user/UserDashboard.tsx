@@ -62,17 +62,34 @@ const syncReceivedOfflinePayments = async (uid: string) => {
     const failed: any[] = [];
 
     for (const item of received) {
-        try {
-            const amount = Number(item.amount);
-            const vault_portion = (amount * vaultPct) / 100;
-            const wallet_portion = amount - vault_portion;
-            const txDocId = item.nonce || `receipt_${Date.now()}`;
+        const txDocId = item.nonce || `receipt_${Date.now()}`;
+        const amount = Number(item.amount);
+        const vault_portion = (amount * vaultPct) / 100;
+        const wallet_portion = amount - vault_portion;
 
+        // 1. Expiration check (3 days threshold)
+        if (item.timestamp && Date.now() - item.timestamp > 3 * 24 * 60 * 60 * 1000) {
+            console.warn("Offline receipt expired:", txDocId);
+            try {
+                await setDoc(doc(db, "offline_payments", txDocId), {
+                    payerId: item.payerId,
+                    recipientId: uid,
+                    amount: amount,
+                    nonce: item.nonce,
+                    status: "expired",
+                    reason: "expired_offline",
+                    updatedAt: serverTimestamp()
+                }, { merge: true });
+            } catch (e) { }
+            continue; // Remove from retry loop
+        }
+
+        try {
             // 2. Global Nonce Deduplication and Balance Updates using a Firestore Transaction
             await runTransaction(db, async (transaction) => {
                 const paymentRef = doc(db, "offline_payments", txDocId);
                 const paymentDoc = await transaction.get(paymentRef);
-                if (paymentDoc.exists()) {
+                if (paymentDoc.exists() && paymentDoc.data().status === "synced") {
                     throw new Error("This offline payment nonce has already been processed.");
                 }
 
@@ -98,9 +115,11 @@ const syncReceivedOfflinePayments = async (uid: string) => {
                     createdAt: serverTimestamp(),
                 });
 
-                // Decrement payer balance
+                // Decrement payer balance and offline reserve buffer
+                const payerOfflineReserve = Number(payerDoc.data().offlineReserve || 0);
                 transaction.update(payerRef, {
-                    walletBalance: increment(-amount)
+                    walletBalance: increment(-amount),
+                    offlineReserve: increment(-Math.min(payerOfflineReserve, amount))
                 });
 
                 // Credit recipient (driver) balance & vault
@@ -139,7 +158,37 @@ const syncReceivedOfflinePayments = async (uid: string) => {
 
         } catch (err: any) {
             console.error("Failed to sync item:", item, err);
-            if (err.message !== "This offline payment nonce has already been processed.") {
+            import("../../services/observabilityService").then(({ logMetric }) => {
+                logMetric({
+                    type: "bluetooth_sync_failure",
+                    message: `Bluetooth receipt sync failed for driver receive: ${txDocId}`,
+                    details: err instanceof Error ? err.message : String(err)
+                });
+            }).catch(() => {});
+            if (err.message === "Payer has insufficient balance on server.") {
+                // Mark settlement as failed due to double-spend/insufficient balance
+                try {
+                    await setDoc(doc(db, "offline_payments", txDocId), {
+                        payerId: item.payerId,
+                        recipientId: uid,
+                        amount: amount,
+                        nonce: item.nonce,
+                        status: "settlement_failed",
+                        reason: "insufficient_balance",
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+
+                    await setDoc(doc(db, "transactions", `tx_${txDocId}`), {
+                        type: "offline_qr_settled",
+                        from: item.payerId,
+                        to: uid,
+                        amount: amount,
+                        status: "failed",
+                        reason: "insufficient_balance",
+                        createdAt: serverTimestamp(),
+                    });
+                } catch (e) { }
+            } else if (err.message !== "This offline payment nonce has already been processed.") {
                 failed.push(item);
             }
         }
@@ -422,26 +471,30 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
     };
 
 
-        const renderUnifiedDashboard = () => (
+    const renderUnifiedDashboard = () => (
       <div className="space-y-6 animate-slide-up pb-24">
         {/* Role identity banner */}
-        <div className={`rounded-[24px] px-5 py-4 flex items-center justify-between border shadow-sm ${
+        <div className={`rounded-3xl p-5 flex items-center justify-between border premium-shadow ${
           role === 'driver'
-            ? (dark ? 'bg-[#FF6B00]/10 border-[#FF6B00]/20' : 'bg-orange-50 border-orange-200')
+            ? (dark ? 'bg-[#FF6B00]/10 border-[#FF6B00]/25' : 'bg-orange-50/70 border-orange-100')
             : role === 'cooperative'
-              ? (dark ? 'bg-[#10B981]/10 border-[#10B981]/20' : 'bg-emerald-50 border-emerald-200')
-              : (dark ? 'bg-[#FFE600]/10 border-[#FFE600]/20' : 'bg-yellow-50 border-yellow-200')
+              ? (dark ? 'bg-[#10B981]/10 border-[#10B981]/25' : 'bg-emerald-50/70 border-emerald-100')
+              : (dark ? 'bg-[#FFE600]/10 border-[#FFE600]/25' : 'bg-yellow-50/70 border-yellow-100')
         }`}>
           <div className="flex items-center gap-4">
-            <span className="text-3xl">{role === 'driver' ? '🛺' : role === 'cooperative' ? '🏢' : '💳'}</span>
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shadow-inner ${
+              role === 'driver' ? 'bg-orange-500/10' : role === 'cooperative' ? 'bg-emerald-500/10' : 'bg-yellow-500/10'
+            }`}>
+              {role === 'driver' ? '🛺' : role === 'cooperative' ? '🏢' : '💳'}
+            </div>
             <div>
               <div className={`text-[10px] font-black uppercase tracking-widest ${
-                role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
+                role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#D4B200]'
               }`}>{role === 'driver' ? 'Driver Wallet' : role === 'cooperative' ? 'Cooperative Treasury' : 'Commuter Pass'}</div>
-              <div className={`text-sm font-bold ${dark ? 'text-gray-200' : 'text-gray-800'}`}>{userData?.displayName || userData?.coopName}</div>
+              <div className={`text-base font-extrabold mt-0.5 ${dark ? 'text-gray-200' : 'text-gray-900'}`}>{userData?.displayName || userData?.coopName}</div>
               {userData?.publicKey && (
-                <div className="text-[9px] font-mono text-gray-400 mt-0.5 select-all break-all max-w-[200px]" title="Stellar Public Key">
-                  {userData.publicKey}
+                <div className="text-[9px] font-mono text-gray-400 mt-1 select-all break-all max-w-[180px] sm:max-w-xs" title="Stellar Public Key">
+                  {userData.publicKey.slice(0, 12)}...{userData.publicKey.slice(-12)}
                 </div>
               )}
             </div>
@@ -451,19 +504,25 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         {/* Hero Balance Card */}
         <div className={`relative overflow-hidden rounded-[32px] p-8 border shadow-xl flex flex-col justify-between transition-all duration-300 ${
           role === 'driver'
-            ? 'bg-gradient-to-br from-[#14100A] to-[#251A14] border-[#FF6B00]/20'
+            ? 'bg-gradient-to-br from-[#1A120B] to-[#2C1D15] border-[#FF6B00]/25'
             : role === 'cooperative'
-              ? 'bg-gradient-to-br from-[#080F14] to-[#0D1A1A] border-[#10B981]/20'
-              : 'bg-gradient-to-br from-[#0E0F14] to-[#161822] border-[#FFE600]/10'
+              ? 'bg-gradient-to-br from-[#0A121A] to-[#0F2222] border-[#10B981]/25'
+              : 'bg-gradient-to-br from-[#0F1017] to-[#1A1C2A] border-[#FFE600]/15'
         }`}>
-          <div className={`absolute top-0 right-0 w-48 h-48 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none opacity-[0.15] ${
+          <div className={`absolute top-0 right-0 w-64 h-64 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none opacity-20 ${
             role === 'driver' ? 'bg-[#FF6B00]' : role === 'cooperative' ? 'bg-[#10B981]' : 'bg-[#FFE600]'
           }`} />
-          <div>
-            <span className="text-xs font-black uppercase tracking-widest text-gray-400">Available Balance</span>
-            <h1 className="text-4xl sm:text-5xl font-black text-white mt-4 tracking-tight">
-              {formatXlm(Number(userData.walletBalance || 0))} <span className="text-xl opacity-50">XLM</span>
+          <div className="relative z-10">
+            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Available Balance</span>
+            <h1 className="text-5xl sm:text-6xl font-black text-white mt-4 tracking-tight flex items-baseline gap-2">
+              {formatXlm(Number(userData.walletBalance || 0))} <span className="text-xl font-extrabold opacity-40">XLM</span>
             </h1>
+          </div>
+          <div className="mt-8 flex justify-between items-center border-t border-white/5 pt-4 relative z-10">
+            <span className="text-[9px] uppercase font-black tracking-wider text-gray-500">Stellar Network</span>
+            <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${
+              userData?.network === "PUBLIC" ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"
+            }`}>{userData?.network === "PUBLIC" ? "Mainnet" : "Testnet"}</span>
           </div>
         </div>
 
@@ -471,19 +530,19 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         <div className="grid grid-cols-2 gap-4">
           <button 
             onClick={() => window.location.href = '/user/send'} 
-            className={`flex items-center justify-center py-5 rounded-[24px] border active:scale-95 transition-all gap-2 font-black text-sm uppercase tracking-wider shadow-md ${
+            className={`flex items-center justify-center py-4 rounded-2xl active:scale-95 transition-all gap-2 font-black text-sm uppercase tracking-wider shadow-md ${
                 role === 'driver' 
-                  ? 'border-[#FF6B00]/20 bg-[#FF6B00] text-white hover:bg-[#E05E00]' 
+                  ? 'bg-[#FF6B00] text-white hover:bg-[#E05E00]' 
                   : role === 'cooperative' 
-                    ? 'border-[#10B981]/20 bg-[#10B981] text-white hover:bg-[#0E9F6E]' 
-                    : 'border-[#FFE600]/20 bg-[#FFE600] text-black hover:bg-[#E6CE00]'
+                    ? 'bg-[#10B981] text-white hover:bg-[#0E9F6E]' 
+                    : 'bg-[#FFE600] text-black hover:bg-[#E6CE00]'
             }`}
           >
-            💸 Pay
+            💸 Send
           </button>
           <button 
             onClick={() => window.location.href = '/user/receive'} 
-            className={`flex items-center justify-center py-5 rounded-[24px] border active:scale-95 transition-all gap-2 font-black text-sm uppercase tracking-wider shadow-md ${
+            className={`flex items-center justify-center py-4 rounded-2xl border active:scale-95 transition-all gap-2 font-black text-sm uppercase tracking-wider shadow-sm ${
               dark ? 'border-white/10 bg-white/5 text-white hover:bg-white/10' : 'border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100'
             }`}
           >
@@ -495,40 +554,41 @@ const CommuterPanel: React.FC<{ userData: any; onRefresh: () => void }> = ({ use
         {role === 'driver' && (
           <div className="grid grid-cols-2 gap-4 mt-6">
              {/* Fuel Credit — auto-disbursed by cooperative, tap to view details */}
-             <button onClick={() => window.location.href = '/user/fuel-credit'} className={`block text-left rounded-[24px] p-5 border shadow-sm active:scale-95 transition-all ${dark ? 'bg-[#14100A] border-[#FF6B00]/15 hover:border-[#FF6B00]/40' : 'bg-white border-gray-200 hover:border-[#FF6B00]/40'}`}>
-                <span className="text-2xl mb-2 block">⛽</span>
+             <button onClick={() => window.location.href = '/user/fuel-credit'} className={`block text-left rounded-3xl p-5 border premium-shadow active:scale-95 transition-all ${dark ? 'bg-[#181410] border-[#FF6B00]/20 hover:border-[#FF6B00]/50' : 'bg-white border-gray-150 hover:border-[#FF6B00]/40'}`}>
+                <span className="text-2xl mb-3 block">⛽</span>
                 <span className="text-[10px] font-black uppercase text-gray-400">Fuel Credit</span>
-                <p className={`text-base font-black mt-1 ${dark ? 'text-white' : 'text-gray-900'}`}>{formatXlm(availableCredit)} XLM</p>
-                <p className={`text-[9px] mt-1 font-semibold ${dark ? 'text-[#FF8833]' : 'text-[#FF6B00]'}`}>View details &rarr;</p>
+                <p className={`text-lg font-black mt-1 ${dark ? 'text-white' : 'text-gray-900'}`}>{formatXlm(availableCredit)} XLM</p>
+                <p className={`text-[10px] mt-2 font-extrabold flex items-center ${dark ? 'text-[#FF8833]' : 'text-[#FF6B00]'}`}>Details &rarr;</p>
              </button>
-             <button onClick={() => window.location.href = '/user/loans'} className={`block text-left rounded-[24px] p-5 border shadow-sm active:scale-95 transition-all ${dark ? 'bg-[#14100A] border-[#FF6B00]/15 hover:border-[#FF6B00]/40' : 'bg-white border-gray-200 hover:border-[#FF6B00]/40'}`}>
-                <span className="text-2xl mb-2 block">🤝</span>
+             <button onClick={() => window.location.href = '/user/loans'} className={`block text-left rounded-3xl p-5 border premium-shadow active:scale-95 transition-all ${dark ? 'bg-[#181410] border-[#FF6B00]/20 hover:border-[#FF6B00]/50' : 'bg-white border-gray-150 hover:border-[#FF6B00]/40'}`}>
+                <span className="text-2xl mb-3 block">🤝</span>
                 <span className="text-[10px] font-black uppercase text-gray-400">Microloans</span>
-                <p className={`text-sm font-black mt-1 ${dark ? 'text-[#FF8833]' : 'text-[#FF6B00]'}`}>Manage &rarr;</p>
+                <p className={`text-sm font-black mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>Manage Loans</p>
+                <p className={`text-[10px] mt-2 font-extrabold flex items-center ${dark ? 'text-[#FF8833]' : 'text-[#FF6B00]'}`}>Review &rarr;</p>
              </button>
           </div>
         )}
 
         {/* Bento stats grid: Locked savings & Trust Delta */}
         <div className="grid grid-cols-2 gap-4 mt-6">
-          <div className={`rounded-[24px] p-5 border shadow-sm ${
+          <div className={`rounded-3xl p-5 border premium-shadow ${
             role === 'driver'
-              ? (dark ? 'bg-[#14100A] border-[#FF6B00]/15' : 'bg-white border-gray-200')
+              ? (dark ? 'bg-[#181410] border-[#FF6B00]/20' : 'bg-white border-gray-150')
               : role === 'cooperative'
-                ? (dark ? 'bg-[#080F14] border-[#10B981]/15' : 'bg-white border-gray-200')
-                : (dark ? 'bg-[#0E0F14] border-[#FFE600]/10' : 'bg-white border-gray-200')
+                ? (dark ? 'bg-[#0E151A] border-[#10B981]/20' : 'bg-white border-gray-150')
+                : (dark ? 'bg-[#12141D] border-[#FFE600]/15' : 'bg-white border-gray-150')
           }`}>
             <span className="text-[10px] font-black uppercase text-gray-400">🔒 Vault Locked</span>
             <p className={`text-lg font-black mt-1 ${
-              role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#FFE600]'
+              role === 'driver' ? 'text-[#FF8833]' : role === 'cooperative' ? 'text-[#34D399]' : 'text-[#D4B200]'
             }`}>{formatXlm(Number(userData.vaultBalance || 0))} XLM</p>
           </div>
-          <div className={`rounded-[24px] p-5 border shadow-sm ${
+          <div className={`rounded-3xl p-5 border premium-shadow ${
             role === 'driver'
-              ? (dark ? 'bg-[#14100A] border-[#FF6B00]/15' : 'bg-white border-gray-200')
+              ? (dark ? 'bg-[#181410] border-[#FF6B00]/20' : 'bg-white border-gray-150')
               : role === 'cooperative'
-                ? (dark ? 'bg-[#080F14] border-[#10B981]/15' : 'bg-white border-gray-200')
-                : (dark ? 'bg-[#0E0F14] border-[#FFE600]/10' : 'bg-white border-gray-200')
+                ? (dark ? 'bg-[#0E151A] border-[#10B981]/20' : 'bg-white border-gray-150')
+                : (dark ? 'bg-[#12141D] border-[#FFE600]/15' : 'bg-white border-gray-150')
           }`}>
             <span className="text-[10px] font-black uppercase text-gray-400">⭐ Trust Score</span>
             <p className="text-lg font-black mt-1 text-emerald-500">{Number(userData.trustScore || 0)} pts</p>

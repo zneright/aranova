@@ -3,8 +3,6 @@ import { useAdminTheme } from "../../contexts/AdminContext";
 import { collection, addDoc, updateDoc, doc, getDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 import { submitStellarPayment, NETWORK_PASSPHRASE } from "../../services/sorobanService";
 import CryptoJS from "crypto-js";
 
@@ -22,6 +20,10 @@ export interface FuelRequest {
   monthlyRepayment?: number;
   status: string;
   purpose?: string;
+  borrowerSignature?: string;
+  adminSignature?: string;
+  blockchainTxHash?: string;
+  termsHash?: string;
 }
 
 export interface UserProfile {
@@ -162,20 +164,25 @@ const AdminLoans: React.FC<{
   };
 
   const getAdminSigningHandler = async (publicKey: string) => {
-    const modules = [new FreighterModule(), new xBullModule(), new LobstrModule()];
+    const modules = [new FreighterModule()];
     let activeModule: any = null;
 
-    for (const mod of modules) {
-      try {
-        if (await mod.isAvailable()) {
-          activeModule = mod;
-          break;
-        }
-      } catch (e) { }
+    const win = window as any;
+    if (win.freighterApi || win.stellar?.isFreighter) {
+      activeModule = modules[0];
+    } else {
+      for (const mod of modules) {
+        try {
+          if (await mod.isAvailable()) {
+            activeModule = mod;
+            break;
+          }
+        } catch (e) { }
+      }
     }
 
     if (!activeModule) {
-      throw new Error("No Stellar wallet extension detected. Please install Freighter, xBull, or Lobstr.");
+      throw new Error("No Stellar wallet extension detected. Please install Freighter.");
     }
 
     return {
@@ -268,7 +275,7 @@ const AdminLoans: React.FC<{
       // Admin signs termsHash
       const signerHandler = await getAdminSigningHandler(disbursalAddress);
       let adminSignature = "";
-      if (signerHandler.signWithWallet) {
+      if (typeof signerHandler.signWithWallet === 'function') {
         adminSignature = "0x_admin_wallet_signature_" + CryptoJS.SHA256(termsHash + Date.now()).toString(CryptoJS.enc.Hex).substring(0, 48);
       }
 
@@ -550,7 +557,8 @@ const AdminLoans: React.FC<{
         </h3>
 
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -598,6 +606,42 @@ const AdminLoans: React.FC<{
               </tbody>
             </table>
           </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {pendingLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No new microloan requests awaiting review.</div>
+            ) : (
+              pendingLoans.map(loan => {
+                const score = getDriverScore(loan.driverId);
+                return (
+                  <div key={loan.id} className="p-4 space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="font-bold text-[15px]">{loan.driverName}</div>
+                        <div className="text-xs opacity-50 mt-0.5">Direct Admin Loan</div>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs bg-gray-50 dark:bg-white/5 px-2.5 py-1 rounded-xl">
+                        <span className={`w-2 h-2 rounded-full ${score > 700 ? "bg-green-500" : score > 450 ? "bg-amber-500" : "bg-red-500"}`} />
+                        <span className="font-bold">{score}</span>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center pt-1">
+                      <div>
+                        <div className="text-[10px] font-black uppercase text-gray-400">Requested Amount</div>
+                        <div className="font-bold text-[15px] mt-0.5">{loan.amount} XLM</div>
+                      </div>
+                      <button
+                        onClick={() => openReview(loan)}
+                        className={`px-4 py-2 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-500/20" : "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"}`}
+                      >
+                        Review & Approve
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
 
@@ -609,7 +653,8 @@ const AdminLoans: React.FC<{
         </h3>
 
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -650,6 +695,41 @@ const AdminLoans: React.FC<{
               </tbody>
             </table>
           </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {approvedLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No active offers awaiting driver signatures.</div>
+            ) : (
+              approvedLoans.map(loan => (
+                <div key={loan.id} className="p-4 space-y-3">
+                  <div>
+                    <div className="font-bold text-[15px]">{loan.driverName}</div>
+                    <div className="text-xs opacity-50 mt-0.5">Direct Admin Loan</div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 space-y-2 text-xs">
+                    <div className="flex justify-between font-semibold">
+                      <span className="opacity-60">Offered Principal:</span>
+                      <span>{loan.amount} XLM</span>
+                    </div>
+                    <div className="flex justify-between font-semibold text-blue-400">
+                      <span className="opacity-80">Approved Principal:</span>
+                      <span>{loan.approvedAmount || loan.amount} XLM</span>
+                    </div>
+                    {loan.monthlyRepayment ? (
+                      <div className="text-amber-500 font-bold border-t border-dashed border-gray-200 dark:border-white/5 pt-1.5">
+                        Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex justify-end pt-1">
+                    <span className="text-xs font-bold text-amber-500 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full animate-pulse">
+                      Awaiting Driver Signature
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
@@ -661,7 +741,8 @@ const AdminLoans: React.FC<{
         </h3>
 
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -711,6 +792,51 @@ const AdminLoans: React.FC<{
               </tbody>
             </table>
           </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {signedByBorrowerLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No signed agreements awaiting countersign.</div>
+            ) : (
+              signedByBorrowerLoans.map(loan => (
+                <div key={loan.id} className="p-4 space-y-3">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="font-bold text-[15px]">{loan.driverName}</div>
+                      <div className="text-xs opacity-50 mt-0.5">Awaiting Double Signature approval</div>
+                    </div>
+                    <span className="text-[10px] font-black uppercase text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-full">
+                      Signed
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 space-y-2 text-xs">
+                    <div className="flex justify-between font-semibold">
+                      <span className="opacity-60">Principal:</span>
+                      <span>{loan.approvedAmount || loan.amount} XLM</span>
+                    </div>
+                    <div className="flex justify-between font-mono text-[9px] opacity-70">
+                      <span>Borrower Sig:</span>
+                      <span>{loan.borrowerSignature?.substring(0, 16)}...</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      onClick={() => handleCounterSign(loan)}
+                      disabled={signingId === loan.id}
+                      className="px-4 py-2.5 rounded-xl text-xs font-extrabold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 active:scale-95 transition-all"
+                    >
+                      {signingId === loan.id ? "Signing..." : "✍️ Counter-sign"}
+                    </button>
+                    <button
+                      onClick={() => downloadAgreementPdf(loan)}
+                      className="px-3 py-2.5 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                    >
+                      📄 PDF
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
@@ -722,7 +848,8 @@ const AdminLoans: React.FC<{
         </h3>
 
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -774,6 +901,47 @@ const AdminLoans: React.FC<{
               </tbody>
             </table>
           </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {awaitingDisbursalLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No approved loans awaiting disbursal.</div>
+            ) : (
+              awaitingDisbursalLoans.map(loan => (
+                <div key={loan.id} className="p-4 space-y-3">
+                  <div>
+                    <div className="font-bold text-[15px]">{loan.driverName}</div>
+                    <div className="text-xs opacity-50 mt-0.5">Direct Admin Loan</div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 space-y-2 text-xs">
+                    <div className="flex justify-between font-semibold">
+                      <span className="opacity-60">Approved Principal:</span>
+                      <span>{loan.approvedAmount || loan.amount} XLM</span>
+                    </div>
+                    {loan.monthlyRepayment ? (
+                      <div className="text-amber-500 font-bold border-t border-dashed border-gray-200 dark:border-white/5 pt-1.5">
+                        Repayment: {loan.monthlyRepayment} XLM/mo over {loan.durationMonths || 1} mo @ {loan.interestRate || 0}%
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button
+                      onClick={() => handleDisburse(loan)}
+                      disabled={disbursingId === loan.id}
+                      className={`px-4 py-2.5 rounded-xl text-xs font-extrabold transition-all active:scale-95 ${dark ? "bg-purple-600 hover:bg-purple-500 text-white shadow-lg shadow-purple-500/20" : "bg-purple-600 hover:bg-purple-700 text-white shadow-md"} ${disbursingId === loan.id ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      {disbursingId === loan.id ? "Signing..." : "🚀 Disburse On-Chain"}
+                    </button>
+                    <button
+                      onClick={() => downloadAgreementPdf(loan)}
+                      className="px-3 py-2.5 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                    >
+                      📄 PDF
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
@@ -784,7 +952,8 @@ const AdminLoans: React.FC<{
           <span className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">{activeLoans.length}</span>
         </h3>
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[900px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -823,7 +992,7 @@ const AdminLoans: React.FC<{
                             {loan.blockchainTxHash.substring(0, 8)}...{loan.blockchainTxHash.substring(loan.blockchainTxHash.length - 8)} ↗
                           </a>
                         ) : (
-                          <span className="text-xs text-gray-555 italic">No TX Record</span>
+                          <span className="text-xs italic opacity-50">No TX Record</span>
                         )}
                       </td>
                       <td className="p-4">
@@ -870,6 +1039,84 @@ const AdminLoans: React.FC<{
               </tbody>
             </table>
           </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {activeLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No active disbursed loans found.</div>
+            ) : (
+              activeLoans.map(loan => (
+                <div key={loan.id} className="p-4 space-y-3">
+                  {/* Header row */}
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <div className="font-bold text-[15px]">{loan.driverName}</div>
+                      <div className="text-[10px] font-black uppercase text-gray-400 mt-0.5">Direct Admin Loan</div>
+                    </div>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold capitalize ${loan.status === "defaulted" ? "bg-red-500/10 text-red-500 border border-red-500/20" : loan.status === "restructured" ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20" : "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20"}`}>
+                      {loan.status}
+                    </span>
+                  </div>
+                  {/* Details block */}
+                  <div className="p-3 rounded-xl bg-gray-50 dark:bg-white/5 space-y-2 text-xs">
+                    <div className="flex justify-between font-semibold">
+                      <span className="opacity-60">Active Principal:</span>
+                      <span>{loan.approvedAmount || loan.amount} XLM</span>
+                    </div>
+                    {loan.monthlyRepayment ? (
+                      <div className="flex justify-between opacity-70">
+                        <span>Monthly Repayment:</span>
+                        <span>{loan.monthlyRepayment} XLM/mo @ {loan.interestRate || 0}%</span>
+                      </div>
+                    ) : null}
+                    {loan.blockchainTxHash ? (
+                      <div className="flex justify-between items-center border-t border-dashed border-gray-200 dark:border-white/5 pt-1.5">
+                        <span className="opacity-60">TX Hash:</span>
+                        <a
+                          href={`https://stellar.expert/explorer/testnet/tx/${loan.blockchainTxHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono font-bold text-blue-500 hover:underline"
+                        >
+                          {loan.blockchainTxHash.substring(0, 8)}...{loan.blockchainTxHash.substring(loan.blockchainTxHash.length - 8)} ↗
+                        </a>
+                      </div>
+                    ) : null}
+                  </div>
+                  {/* Actions */}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        const rate = prompt("Enter new Interest Rate (%):", String(loan.interestRate || 3));
+                        const months = prompt("Enter new Duration (Months):", String(loan.durationMonths || 1));
+                        if (rate && months) handleRestructure(loan, Number(rate), Number(months));
+                      }}
+                      className="py-2 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 rounded-xl text-xs font-bold transition-all active:scale-95"
+                    >
+                      Restructure
+                    </button>
+                    <button
+                      onClick={() => handleMarkDefaulted(loan)}
+                      className="py-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 rounded-xl text-xs font-bold transition-all active:scale-95"
+                    >
+                      Mark Default
+                    </button>
+                    <button
+                      onClick={() => handleWriteOff(loan)}
+                      className="py-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-xl text-xs font-bold transition-all active:scale-95"
+                    >
+                      Write Off
+                    </button>
+                    <button
+                      onClick={() => downloadAgreementPdf(loan)}
+                      className="py-2 border border-white/10 hover:bg-white/5 text-gray-300 rounded-xl text-xs font-bold transition-all"
+                    >
+                      📄 Download PDF
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
@@ -880,7 +1127,8 @@ const AdminLoans: React.FC<{
           <span className="text-xs bg-gray-500/20 text-gray-400 border border-gray-500/20 px-2 py-0.5 rounded-full font-bold">{closedLoans.length}</span>
         </h3>
         <div className={`rounded-2xl border overflow-hidden ${dark ? "bg-[#141722] border-white/10" : "bg-white border-gray-200"}`}>
-          <div className="overflow-x-auto">
+          {/* Desktop Table View */}
+          <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left border-collapse min-w-[800px]">
               <thead>
                 <tr className={`border-b text-sm ${dark ? "border-white/10 text-gray-400" : "border-gray-200 text-gray-500"}`}>
@@ -918,6 +1166,32 @@ const AdminLoans: React.FC<{
                 )}
               </tbody>
             </table>
+          </div>
+          {/* Mobile Stacked Card View */}
+          <div className="block md:hidden divide-y divide-gray-100 dark:divide-white/5">
+            {closedLoans.length === 0 ? (
+              <div className="p-8 text-center text-gray-500">No closed/settled loan records.</div>
+            ) : (
+              closedLoans.map(loan => (
+                <div key={loan.id} className="p-4 flex items-center justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-[15px] truncate">{loan.driverName}</div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="font-bold text-sm">{loan.approvedAmount || loan.amount} XLM</span>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${loan.status === "repaid" ? "bg-green-500/10 text-green-500 border border-green-500/20" : "bg-gray-500/10 text-gray-400 border border-gray-500/20"}`}>
+                        {loan.status}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => downloadAgreementPdf(loan)}
+                    className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold border border-white/10 hover:bg-white/5 text-gray-300 transition-all"
+                  >
+                    📄 PDF
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>

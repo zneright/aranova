@@ -251,6 +251,30 @@ export const syncBluetoothQueue = async (userId: string) => {
             const amt = Number(payment.amount || 0);
             if (amt <= 0) continue;
 
+            const txDocId = payment.nonce || payment.id || `receipt_${Date.now()}`;
+            const pendingKey = `aranova_pending_offline_deductions_${userId}`;
+
+            // 1. Expiration check (3 days threshold)
+            if (payment.timestamp && Date.now() - payment.timestamp > 3 * 24 * 60 * 60 * 1000) {
+                console.warn("Payer outgoing offline payment expired:", txDocId);
+                try {
+                    await setDoc(doc(db, "offline_payments", txDocId), {
+                        payerId: userId,
+                        recipientId: payment.recipient,
+                        amount: amt,
+                        nonce: payment.nonce,
+                        status: "expired",
+                        reason: "expired_offline",
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+                } catch (e) { }
+
+                // Reset pending deduction locally
+                const currentPending = Number(localStorage.getItem(pendingKey) || "0");
+                localStorage.setItem(pendingKey, Math.max(0, currentPending - amt).toString());
+                continue; // Remove from retry queue
+            }
+
             try {
                 // Database transaction update
                 const commuterRef = doc(db, "users", userId);
@@ -263,8 +287,10 @@ export const syncBluetoothQueue = async (userId: string) => {
                     if (currentBalance < amt) {
                         throw new Error("Insufficient balance on server.");
                     }
+                    const currentReserve = Number(commuterDoc.data().offlineReserve || 0);
                     transaction.update(commuterRef, {
-                        walletBalance: increment(-amt)
+                        walletBalance: increment(-amt),
+                        offlineReserve: increment(-Math.min(currentReserve, amt))
                     });
                 });
 
@@ -282,11 +308,10 @@ export const syncBluetoothQueue = async (userId: string) => {
                 try {
                     const secret = localStorage.getItem(`aranova_wallet_secret_${userId}`);
                     if (secret) {
-                        const { Keypair, TransactionBuilder, Operation, Asset, Horizon } = await import("@stellar/stellar-sdk");
+                        const { Keypair, TransactionBuilder, Operation, Asset } = await import("@stellar/stellar-sdk");
                         const kp = Keypair.fromSecret(secret);
-                        const serverUrl = import.meta.env.VITE_HORIZON_URL || "https://horizon-testnet.stellar.org";
-                        const server = new Horizon.Server(serverUrl);
-                        const sourceAccount = await server.loadAccount(kp.publicKey());
+                        const { horizonServer } = await import("./sorobanService");
+                        const sourceAccount = await horizonServer.loadAccount(kp.publicKey());
                         const tx = new TransactionBuilder(sourceAccount, {
                             fee: "100",
                             networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || "Test Stellar Network ; September 2015"
@@ -299,13 +324,12 @@ export const syncBluetoothQueue = async (userId: string) => {
                         .setTimeout(30)
                         .build();
                         tx.sign(kp);
-                        await server.submitTransaction(tx);
+                        await horizonServer.submitTransaction(tx);
                     }
                 } catch (stellarErr) {
                     console.warn("Stellar on-chain sync failed for outgoing payment:", stellarErr);
                 }
 
-                const txDocId = payment.nonce || payment.id;
                 await setDoc(doc(db, "transactions", txDocId), {
                     type: "bluetooth_payment",
                     from: userId,
@@ -315,12 +339,47 @@ export const syncBluetoothQueue = async (userId: string) => {
                     createdAt: serverTimestamp(),
                 });
 
-                const pendingKey = `aranova_pending_offline_deductions_${userId}`;
                 const currentPending = Number(localStorage.getItem(pendingKey) || "0");
                 localStorage.setItem(pendingKey, Math.max(0, currentPending - amt).toString());
-            } catch (err) {
+            } catch (err: any) {
                 console.error("Failed to sync outgoing offline payment:", err);
-                failedOutgoing.push(payment);
+                import("./observabilityService").then(({ logMetric }) => {
+                    logMetric({
+                        type: "bluetooth_sync_failure",
+                        message: `Bluetooth sync failed for outgoing payment: ${txDocId}`,
+                        details: err instanceof Error ? err.message : String(err)
+                    });
+                }).catch(() => {});
+                if (err.message === "Insufficient balance on server.") {
+                    // Mark settlement as failed due to insufficient balance/double-spend
+                    try {
+                        await setDoc(doc(db, "offline_payments", txDocId), {
+                            payerId: userId,
+                            recipientId: payment.recipient,
+                            amount: amt,
+                            nonce: payment.nonce,
+                            status: "settlement_failed",
+                            reason: "insufficient_balance",
+                            updatedAt: serverTimestamp()
+                        }, { merge: true });
+
+                        await setDoc(doc(db, "transactions", txDocId), {
+                            type: "bluetooth_payment",
+                            from: userId,
+                            to: payment.recipient,
+                            amount: amt,
+                            status: "failed",
+                            reason: "insufficient_balance",
+                            createdAt: serverTimestamp(),
+                        });
+                    } catch (e) { }
+
+                    // Reset pending deduction locally
+                    const currentPending = Number(localStorage.getItem(pendingKey) || "0");
+                    localStorage.setItem(pendingKey, Math.max(0, currentPending - amt).toString());
+                } else {
+                    failedOutgoing.push(payment);
+                }
             }
         }
         if (failedOutgoing.length) {
@@ -371,11 +430,10 @@ export const syncBluetoothQueue = async (userId: string) => {
                 try {
                     const adminSecret = import.meta.env.VITE_ADMIN_SECRET;
                     if (adminSecret) {
-                        const { Keypair, TransactionBuilder, Operation, Asset, Horizon } = await import("@stellar/stellar-sdk");
+                        const { Keypair, TransactionBuilder, Operation, Asset } = await import("@stellar/stellar-sdk");
                         const adminKp = Keypair.fromSecret(adminSecret);
-                        const serverUrl = import.meta.env.VITE_HORIZON_URL || "https://horizon-testnet.stellar.org";
-                        const server = new Horizon.Server(serverUrl);
-                        const sourceAccount = await server.loadAccount(adminKp.publicKey());
+                        const { horizonServer } = await import("./sorobanService");
+                        const sourceAccount = await horizonServer.loadAccount(adminKp.publicKey());
                         const tx = new TransactionBuilder(sourceAccount, {
                             fee: "100",
                             networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE || "Test Stellar Network ; September 2015"
@@ -388,7 +446,7 @@ export const syncBluetoothQueue = async (userId: string) => {
                         .setTimeout(30)
                         .build();
                         tx.sign(adminKp);
-                        await server.submitTransaction(tx);
+                        await horizonServer.submitTransaction(tx);
                     }
                 } catch (stellarErr) {
                     console.warn("Stellar on-chain sync failed for received receipt:", stellarErr);
@@ -422,32 +480,74 @@ export const syncBluetoothQueue = async (userId: string) => {
 // ─── Cryptographic Helpers for Secure PIN Encryption ───
 export const encryptWithPin = (plaintext: string, pin: string): string => {
     const salt = CryptoJS.lib.WordArray.random(128 / 8);
-    const key = CryptoJS.PBKDF2(pin, salt, {
-        keySize: 256 / 32,
-        iterations: 5000
+    // Derive a 512-bit key (16 words of 32 bits each)
+    const derived = CryptoJS.PBKDF2(pin, salt, {
+        keySize: 512 / 32,
+        iterations: 100000,
+        hasher: CryptoJS.algo.SHA256
     });
+    // Split into encryption key (first 256 bits) and MAC key (second 256 bits)
+    const encKey = CryptoJS.lib.WordArray.create(derived.words.slice(0, 8));
+    const macKey = CryptoJS.lib.WordArray.create(derived.words.slice(8, 16));
+
     const iv = CryptoJS.lib.WordArray.random(128 / 8);
-    const encrypted = CryptoJS.AES.encrypt(plaintext, key, { iv: iv });
-    return `${salt.toString()}:${iv.toString()}:${encrypted.toString()}`;
+    const encrypted = CryptoJS.AES.encrypt(plaintext, encKey, { iv: iv });
+    const ciphertext = encrypted.toString();
+
+    // Compute HMAC-SHA256 over salt + iv + ciphertext
+    const message = salt.toString() + ":" + iv.toString() + ":" + ciphertext;
+    const hmac = CryptoJS.HmacSHA256(message, macKey).toString();
+
+    // Format: salt:iv:ciphertext:hmac
+    return `${message}:${hmac}`;
 };
 
 export const decryptWithPin = (encryptedData: string, pin: string): string => {
     try {
         if (!encryptedData) return "";
         const parts = encryptedData.split(":");
-        if (parts.length !== 3) {
-            // Fallback for legacy simple CryptoJS.AES encryptions
+        if (parts.length === 3) {
+            // Legacy decrypt
+            const salt = CryptoJS.enc.Hex.parse(parts[0]);
+            const iv = CryptoJS.enc.Hex.parse(parts[1]);
+            const ciphertext = parts[2];
+            const key = CryptoJS.PBKDF2(pin, salt, {
+                keySize: 256 / 32,
+                iterations: 5000
+            });
+            const decrypted = CryptoJS.AES.decrypt(ciphertext, key, { iv: iv });
+            return decrypted.toString(CryptoJS.enc.Utf8);
+        }
+        if (parts.length !== 4) {
+            // Fallback for simple legacy decryptions
             const bytes = CryptoJS.AES.decrypt(encryptedData, pin);
             return bytes.toString(CryptoJS.enc.Utf8);
         }
-        const salt = CryptoJS.enc.Hex.parse(parts[0]);
-        const iv = CryptoJS.enc.Hex.parse(parts[1]);
+        const saltHex = parts[0];
+        const ivHex = parts[1];
         const ciphertext = parts[2];
-        const key = CryptoJS.PBKDF2(pin, salt, {
-            keySize: 256 / 32,
-            iterations: 5000
+        const hmacHex = parts[3];
+
+        const salt = CryptoJS.enc.Hex.parse(saltHex);
+        const iv = CryptoJS.enc.Hex.parse(ivHex);
+
+        // Derive same 512-bit key
+        const derived = CryptoJS.PBKDF2(pin, salt, {
+            keySize: 512 / 32,
+            iterations: 100000,
+            hasher: CryptoJS.algo.SHA256
         });
-        const decrypted = CryptoJS.AES.decrypt(ciphertext, key, { iv: iv });
+        const encKey = CryptoJS.lib.WordArray.create(derived.words.slice(0, 8));
+        const macKey = CryptoJS.lib.WordArray.create(derived.words.slice(8, 16));
+
+        // Recompute and verify HMAC first (Encrypt-then-MAC verification)
+        const message = saltHex + ":" + ivHex + ":" + ciphertext;
+        const computedHmac = CryptoJS.HmacSHA256(message, macKey).toString();
+        if (computedHmac !== hmacHex) {
+            throw new Error("MAC verification failed: Data has been tampered with or incorrect passphrase.");
+        }
+
+        const decrypted = CryptoJS.AES.decrypt(ciphertext, encKey, { iv: iv });
         return decrypted.toString(CryptoJS.enc.Utf8);
     } catch (e) {
         return "";
@@ -494,4 +594,26 @@ export const clearPinAttempts = (userId: string): void => {
     const lockoutKey = `aranova_pin_lockout_${userId}`;
     localStorage.removeItem(attemptsKey);
     localStorage.removeItem(lockoutKey);
+};
+
+let serverTimeOffset = 0; // offset in ms (serverTime - localTime)
+
+export const syncTrustedTimeOffset = async () => {
+    try {
+        const start = Date.now();
+        const response = await fetch("https://worldtimeapi.org/api/timezone/Etc/UTC");
+        if (response.ok) {
+            const data = await response.json();
+            const serverMs = new Date(data.utc_datetime).getTime();
+            const latency = (Date.now() - start) / 2;
+            serverTimeOffset = serverMs - (start + latency);
+            console.log(`Trusted Time Offset Synced: ${serverTimeOffset}ms`);
+        }
+    } catch (e) {
+        console.warn("Failed to sync trusted time offset, falling back to system clock:", e);
+    }
+};
+
+export const getTrustedTime = (): number => {
+    return Date.now() + serverTimeOffset;
 };

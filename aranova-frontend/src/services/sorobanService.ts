@@ -12,6 +12,8 @@ import {
   Operation,
   Asset,
 } from "@stellar/stellar-sdk";
+import { db } from "../firebase/config";
+import { doc, runTransaction, updateDoc } from "firebase/firestore";
 
 // MVP Deployed Contract IDs & Registry
 export const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ID || "CCXX5IPHC2I6U36ZP2PALB6YPP2G36D2MBDGEYYXF3YQVS75BPMINCNE";
@@ -27,9 +29,8 @@ export const LOAN_CONTRACT_ID = CONTRACT_REGISTRY.fuelCredit;
 
 export const NETWORK = import.meta.env.VITE_NETWORK || "TESTNET";
 
-export const RPC_URL = NETWORK === "PUBLIC"
-  ? "https://soroban-rpc.stellar.org" // fallback or mainnet rpc
-  : "https://soroban-testnet.stellar.org";
+export const RPC_URL = import.meta.env.VITE_SOROBAN_RPC_URL || 
+  (NETWORK === "PUBLIC" ? "https://soroban-rpc.stellar.org" : "https://soroban-testnet.stellar.org");
 
 export const NETWORK_PASSPHRASE = NETWORK === "PUBLIC"
   ? Networks.PUBLIC
@@ -38,11 +39,105 @@ export const NETWORK_PASSPHRASE = NETWORK === "PUBLIC"
 // Default XLM token contract ID on Testnet
 export const DEFAULT_TOKEN_ADDRESS = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
-export const HORIZON_URL = NETWORK === "PUBLIC"
-  ? "https://horizon.stellar.org"
-  : "https://horizon-testnet.stellar.org";
+export const HORIZON_URL = import.meta.env.VITE_HORIZON_URL ||
+  (NETWORK === "PUBLIC" ? "https://horizon.stellar.org" : "https://horizon-testnet.stellar.org");
 
-const horizonServer = new Horizon.Server(HORIZON_URL);
+const BACKUP_RPC_URLS = NETWORK === "PUBLIC"
+  ? ["https://soroban-rpc.stellar.org", "https://public.stellar.node.org", "https://rpc.stellar.org"]
+  : ["https://soroban-testnet.stellar.org", "https://testnet.stellar.org/rpc", "https://soroban-testnet.publicnode.com"];
+
+const BACKUP_HORIZON_URLS = NETWORK === "PUBLIC"
+  ? ["https://horizon.stellar.org", "https://horizon.publicnode.com"]
+  : ["https://horizon-testnet.stellar.org", "https://horizon-testnet.publicnode.com"];
+
+export class FailoverRpcServer {
+    private currentUrl: string;
+    private server: rpc.Server;
+
+    constructor(initialUrl: string) {
+        this.currentUrl = initialUrl;
+        this.server = new rpc.Server(initialUrl);
+    }
+
+    private async runWithFailover<T>(op: (s: rpc.Server) => Promise<T>): Promise<T> {
+        try {
+            return await op(this.server);
+        } catch (err) {
+            console.warn(`RPC server at ${this.currentUrl} failed. Attempting failovers...`, err);
+            for (const backup of BACKUP_RPC_URLS) {
+                if (backup === this.currentUrl) continue;
+                try {
+                    const tempServer = new rpc.Server(backup);
+                    await tempServer.getNetwork();
+                    console.log(`Successfully switched RPC to backup: ${backup}`);
+                    this.currentUrl = backup;
+                    this.server = tempServer;
+                    return await op(this.server);
+                } catch (e) {
+                    console.warn(`Backup RPC ${backup} failed:`, e);
+                }
+            }
+            import("./observabilityService").then(({ logMetric }) => {
+                logMetric({
+                    type: "rpc_failure",
+                    message: `All RPC server failover attempts exhausted. Active URL: ${this.currentUrl}`,
+                    details: err instanceof Error ? err.message : String(err)
+                });
+            }).catch(() => {});
+            throw err;
+        }
+    }
+
+    async simulateTransaction(tx: any) { return this.runWithFailover(s => s.simulateTransaction(tx)); }
+    async getAccount(address: any) { return this.runWithFailover(s => s.getAccount(address)); }
+    async sendTransaction(tx: any) { return this.runWithFailover(s => s.sendTransaction(tx)); }
+    async getTransaction(hash: any) { return this.runWithFailover(s => s.getTransaction(hash)); }
+}
+
+export class FailoverHorizonServer {
+    private currentUrl: string;
+    private server: Horizon.Server;
+
+    constructor(initialUrl: string) {
+        this.currentUrl = initialUrl;
+        this.server = new Horizon.Server(initialUrl);
+    }
+
+    private async runWithFailover<T>(op: (s: Horizon.Server) => Promise<T>): Promise<T> {
+        try {
+            return await op(this.server);
+        } catch (err) {
+            console.warn(`Horizon server at ${this.currentUrl} failed. Attempting failovers...`, err);
+            for (const backup of BACKUP_HORIZON_URLS) {
+                if (backup === this.currentUrl) continue;
+                try {
+                    const tempServer = new Horizon.Server(backup);
+                    await tempServer.root();
+                    console.log(`Successfully switched Horizon to backup: ${backup}`);
+                    this.currentUrl = backup;
+                    this.server = tempServer;
+                    return await op(this.server);
+                } catch (e) {
+                    console.warn(`Backup Horizon ${backup} failed:`, e);
+                }
+            }
+            import("./observabilityService").then(({ logMetric }) => {
+                logMetric({
+                    type: "horizon_failure",
+                    message: `All Horizon server failover attempts exhausted. Active URL: ${this.currentUrl}`,
+                    details: err instanceof Error ? err.message : String(err)
+                });
+            }).catch(() => {});
+            throw err;
+        }
+    }
+
+    async loadAccount(publicKey: string) { return this.runWithFailover(s => s.loadAccount(publicKey)); }
+    async submitTransaction(tx: any) { return this.runWithFailover(s => s.submitTransaction(tx)); }
+    async feeStats() { return this.runWithFailover(s => s.feeStats()); }
+}
+
+export const horizonServer = new FailoverHorizonServer(HORIZON_URL);
 
 /**
  * Fetch actual XLM balance from Stellar Horizon network
@@ -119,7 +214,7 @@ export async function submitStellarPayment(
 
 const DUMMY_SOURCE_KEYPAIR = Keypair.random();
 
-const server = new rpc.Server(RPC_URL);
+const server = new FailoverRpcServer(RPC_URL);
 
 /**
  * Utility: Executes a read-only transaction simulation to retrieve contract values.
@@ -195,6 +290,25 @@ export async function submitWriteTransaction(
   },
   contractId: string = CONTRACT_ID
 ): Promise<string> {
+  const lockRef = doc(db, "system", "transaction_lock");
+  
+  // Acquire lock to coordinate concurrent txs safely
+  await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(lockRef);
+    const now = Date.now();
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data.active && (now - data.timestamp < 30000)) {
+        throw new Error("Another transaction is currently processing on the network. Please wait a few seconds and try again.");
+      }
+    }
+    transaction.set(lockRef, {
+      active: true,
+      timestamp: now,
+      acquiredBy: sourceAddress
+    });
+  });
+
   try {
     // 1. Fetch source account from Soroban RPC
     let accountResponse;
@@ -208,9 +322,20 @@ export async function submitWriteTransaction(
     const contract = new Contract(contractId);
     const op = contract.call(methodName, ...args);
 
+    // Fetch dynamic base fee from Horizon to handle congestion
+    let dynamicFee = "100";
+    try {
+      const stats = await horizonServer.feeStats();
+      if (stats && stats.fee_charged && stats.fee_charged.mode) {
+        dynamicFee = Math.max(100, Number(stats.fee_charged.mode)).toString();
+      }
+    } catch (feeErr) {
+      console.warn("Horizon feeStats query bypassed, using default base fee (100 stroops):", feeErr);
+    }
+
     // 2. Build preliminary transaction
     const tx = new TransactionBuilder(accountResponse, {
-      fee: "100",
+      fee: dynamicFee,
       networkPassphrase: NETWORK_PASSPHRASE,
     })
       .addOperation(op)
@@ -273,7 +398,20 @@ export async function submitWriteTransaction(
     throw new Error("Transaction verification timed out.");
   } catch (error) {
     console.error(`Error executing ${methodName}:`, error);
+    import("./observabilityService").then(({ logMetric }) => {
+        logMetric({
+            type: "soroban_vm_error",
+            message: `Soroban Smart Contract transaction execution error: ${methodName}`,
+            details: error instanceof Error ? error.message : String(error)
+        });
+    }).catch(() => {});
     throw error;
+  } finally {
+    try {
+      await updateDoc(lockRef, { active: false });
+    } catch (e) {
+      console.warn("Failed to release transaction lock:", e);
+    }
   }
 }
 
@@ -655,6 +793,64 @@ export async function repaySystemLoanPartialOnChain(
     ],
     signingHandler,
     CONTRACT_REGISTRY.systemLoan
+  );
+}
+
+/**
+ * Set trust scoring weights rules configuration on-chain (admin only).
+ */
+export async function setTrustRulesOnChain(
+  adminAddress: string,
+  rules: {
+    on_time_repayment_bonus: bigint;
+    vault_maturity_bonus: bigint;
+    loan_completed_bonus: bigint;
+    late_payment_penalty: bigint;
+    default_penalty: bigint;
+    early_unlock_penalty: bigint;
+  },
+  signingHandler: any
+): Promise<string> {
+  const rulesVal = nativeToScVal({
+    on_time_repayment_bonus: rules.on_time_repayment_bonus,
+    vault_maturity_bonus: rules.vault_maturity_bonus,
+    loan_completed_bonus: rules.loan_completed_bonus,
+    late_payment_penalty: rules.late_payment_penalty,
+    default_penalty: rules.default_penalty,
+    early_unlock_penalty: rules.early_unlock_penalty,
+  });
+
+  return submitWriteTransaction(
+    adminAddress,
+    "set_rules",
+    [rulesVal],
+    signingHandler,
+    CONTRACT_REGISTRY.trust
+  );
+}
+
+/**
+ * Release cooperative credit to driver.
+ */
+export async function releaseCredit(
+  coopAddress: string,
+  driverAddress: string,
+  amount: bigint,
+  _interestRateBps: bigint,
+  _durationMonths: number,
+  signingHandler: any
+): Promise<string> {
+  return submitWriteTransaction(
+    driverAddress,
+    "request_fuel_credit",
+    [
+      Address.fromString(driverAddress).toScVal(),
+      Address.fromString(coopAddress).toScVal(),
+      Address.fromString(DEFAULT_TOKEN_ADDRESS).toScVal(),
+      nativeToScVal(amount, { type: "i128" }),
+    ],
+    signingHandler,
+    CONTRACT_REGISTRY.fuelCredit
   );
 }
 

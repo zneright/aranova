@@ -4,8 +4,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Mobile-first global resets ───────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
   --role-accent: #FFE600;
+
+  /* Safe-area inset custom properties for notched/rounded devices */
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+html {
+  overflow-x: hidden;
+  max-width: 100%;
 }
 
 body {
@@ -15,6 +33,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  max-width: 100%;
 }
 
 #root {
@@ -101,4 +120,86 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* Glassmorphism Navigation & Panels */
+.nav-glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+.dark .nav-glass {
+  background: rgba(10, 11, 14, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.panel-glass {
+  background: rgba(255, 255, 255, 0.45);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.dark .panel-glass {
+  background: rgba(20, 22, 32, 0.45);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Premium Shadows & Borders */
+.premium-shadow {
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.03), 0 1px 2px 0 rgba(0, 0, 0, 0.02);
+}
+.dark .premium-shadow {
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3), 0 1px 2px 0 rgba(0, 0, 0, 0.1);
+}
+
+.premium-border {
+  border: 1px solid rgba(234, 230, 223, 0.8);
+}
+.dark .premium-border {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Inputs & Actions */
+.premium-input {
+  transition: all 0.2s ease-in-out;
+  border: 1.5px solid rgba(0, 0, 0, 0.08);
+}
+.dark .premium-input {
+  border: 1.5px solid rgba(255, 255, 255, 0.08);
+}
+.premium-input:focus {
+  border-color: currentColor;
+  box-shadow: 0 0 0 4px rgba(var(--role-accent-rgb), 0.15);
+}
+
+/* Custom Bottom Sheets & Steppers */
+.bottom-sheet {
+  animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+/* ── Utility: hide scrollbar while keeping scroll functionality ─── */
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE / Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;             /* Chrome / Safari / Opera */
+}
+
+/* Accessibility placeholder styling for WCAG AA compliance */
+input::placeholder,
+textarea::placeholder,
+select::placeholder {
+  color: #6B7280 !important; /* Tailwind gray-500: high contrast in light mode */
+}
+.dark input::placeholder,
+.dark textarea::placeholder,
+.dark select::placeholder {
+  color: #9CA3AF !important; /* Tailwind gray-400: high contrast in dark mode */
 }

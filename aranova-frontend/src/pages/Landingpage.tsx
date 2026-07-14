@@ -218,7 +218,7 @@ const LandingPage: React.FC = () => {
       </header>
 
       {/* ─── HERO SECTION ─── */}
-      <section style={{
+      <section className="hero-section" style={{
         minHeight: "100vh",
         display: "flex",
         flexDirection: "column",
@@ -1227,6 +1227,65 @@ const LandingPage: React.FC = () => {
           .desktop-only { display: none !important; }
           .simulator-grid { grid-template-columns: 1fr !important; gap: 40px !important; }
           .landing-header { padding: 0 1.5rem !important; }
+        }
+
+        @media (max-width: 480px) {
+          .landing-header {
+            height: 64px !important;
+            padding: 0 1rem !important;
+          }
+          .header-logo {
+            height: 36px !important;
+            width: 36px !important;
+          }
+          .landing-header div span {
+            font-size: 16px !important;
+            letter-spacing: -0.5px !important;
+          }
+          .landing-header .btn-secondary {
+            display: none !important;
+          }
+          .landing-header .btn-primary {
+            padding: 8px 16px !important;
+            font-size: 11px !important;
+            border-radius: 8px !important;
+          }
+          .landing-header .theme-toggle {
+            width: 32px !important;
+            height: 32px !important;
+            font-size: 14px !important;
+          }
+          section {
+            padding: 60px 1rem !important;
+          }
+          .hero-section {
+            padding: 100px 1rem 50px !important;
+          }
+          .badge-eyebrow {
+            padding: 6px 14px !important;
+            font-size: 11px !important;
+            margin-bottom: 1.5rem !important;
+          }
+          .hero-title {
+            font-size: 2.1rem !important;
+            letter-spacing: -1.2px !important;
+            margin-bottom: 1.25rem !important;
+          }
+          .hero-desc {
+            font-size: 0.95rem !important;
+            margin-bottom: 2rem !important;
+            line-height: 1.5 !important;
+          }
+          .btn-hero-primary {
+            padding: 14px 28px !important;
+            font-size: 14px !important;
+          }
+          .simulator-grid {
+            gap: 20px !important;
+          }
+          .simulator-card {
+            padding: 1.5rem !important;
+          }
         }
       `}</style>
     </div>

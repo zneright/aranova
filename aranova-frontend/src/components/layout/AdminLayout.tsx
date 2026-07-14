@@ -366,9 +366,9 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
               {/* Right: status + dark + bell + profile */}
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {/* Node status */}
-                <div style={{ display: "flex", alignItems: "center", gap: 6, background: dark ? "rgba(52,211,153,0.1)" : "#ECFDF5", border: `1px solid ${dark ? "rgba(52,211,153,0.2)" : "#A7F3D0"}`, borderRadius: 20, padding: "4px 12px", fontSize: 11, fontWeight: 700, color: "#34D399", transition: "background .2s, border .2s" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#34D399", display: "inline-block", animation: "adminpulse 2s infinite" }} />
-                  Node Live
+                <div style={{ display: "flex", alignItems: "center", gap: 6, background: dark ? "rgba(52,211,153,0.1)" : "#ECFDF5", border: `1px solid ${dark ? "rgba(52,211,153,0.2)" : "#A7F3D0"}`, borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: "#34D399", transition: "background .2s, border .2s" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#34D399", display: "inline-block", animation: "adminpulse 2s infinite", flexShrink: 0 }} />
+                  <span className="hidden sm:inline">Node Live</span>
                 </div>
 
                 {/* Dark toggle */}
@@ -387,10 +387,10 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
                 <div ref={profileRef} style={{ position: "relative" }}>
                   <button
                     onClick={() => setProfileOpen((v) => !v)}
-                    style={{ display: "flex", alignItems: "center", gap: 8, background: dark ? "rgba(255,255,255,0.06)" : "#F1F5F9", border: `1px solid ${tk.sbBorder}`, borderRadius: 22, padding: "4px 10px 4px 4px", cursor: "pointer", transition: "background .2s, border .2s" }}
+                    style={{ display: "flex", alignItems: "center", gap: 8, background: dark ? "rgba(255,255,255,0.06)" : "#F1F5F9", border: `1px solid ${tk.sbBorder}`, borderRadius: 22, padding: "4px 8px 4px 4px", cursor: "pointer", transition: "background .2s, border .2s" }}
                   >
-                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#3B82F6,#C0392B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900, color: "#fff" }}>A</div>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: tk.text, transition: "color .2s" }}>Admin</span>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "linear-gradient(135deg,#3B82F6,#C0392B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 900, color: "#fff", flexShrink: 0 }}>A</div>
+                    <span className="hidden sm:inline" style={{ fontSize: 13, fontWeight: 600, color: tk.text, transition: "color .2s" }}>Admin</span>
                     <IcoChevron open={profileOpen} c={tk.sbText} />
                   </button>
 
@@ -435,7 +435,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({
             </header>
 
             {/* ── PAGE CONTENT ─────────────────────────────────────────── */}
-            <div style={{ flex: 1, overflowY: "auto", padding: 28, paddingBottom: 40 }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: isMobile ? 16 : 28, paddingBottom: isMobile ? 24 : 40, overflowX: "hidden" }}>
               {children}
             </div>
           </div>

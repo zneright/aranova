@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { doc, updateDoc } from "firebase/firestore";
+import { useState, useEffect } from "react";
+import { doc, updateDoc, deleteField } from "firebase/firestore";
 import { Keypair } from "@stellar/stellar-sdk";
 import { db, auth } from "../../firebase/config";
 import { useAuth } from "../../contexts/AuthContext";
@@ -8,8 +8,6 @@ import { useTheme } from "../../contexts/ThemeContext";
 import LoadingWorkspace from "../../components/ui/LoadingWorkspace";
 import { encryptWithPin, decryptWithPin, checkPinLockout, registerFailedPinAttempt, clearPinAttempts } from "../../services/aranovaWorkflow";
 import { FreighterModule } from '@creit.tech/stellar-wallets-kit/modules/freighter';
-import { xBullModule } from '@creit.tech/stellar-wallets-kit/modules/xbull';
-import { LobstrModule } from '@creit.tech/stellar-wallets-kit/modules/lobstr';
 
 const UserSettings = () => {
   const { dark } = useTheme();
@@ -40,22 +38,52 @@ const UserSettings = () => {
   const [connectingWallet, setConnectingWallet] = useState(false);
   const [walletError, setWalletError] = useState("");
 
-  const connectUserWallet = async (walletId: string) => {
+  const [freighterDetected, setFreighterDetected] = useState(false);
+
+  useEffect(() => {
+    const detect = async () => {
+      const freighter = new FreighterModule();
+      let freighterAvailable = false;
+
+      if (typeof window !== "undefined") {
+        const win = window as any;
+        if (win.freighterApi || win.stellar?.isFreighter) {
+          freighterAvailable = true;
+        }
+      }
+
+      if (!freighterAvailable) {
+        try {
+          freighterAvailable = await freighter.isAvailable();
+        } catch (e) {}
+      }
+
+      setFreighterDetected(freighterAvailable);
+    };
+    detect();
+    const timer = setTimeout(detect, 800);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const connectUserWallet = async (walletId: string = "freighter") => {
     setConnectingWallet(true);
     setWalletError("");
     try {
       let walletModule: any;
       if (walletId === 'freighter') walletModule = new FreighterModule();
-      else if (walletId === 'xbull') walletModule = new xBullModule();
-      else if (walletId === 'lobstr') walletModule = new LobstrModule();
 
       if (!walletModule) throw new Error("Wallet standard module failed to load.");
 
       let isAvailable = false;
-      try {
-        isAvailable = await walletModule.isAvailable();
-      } catch (err) {
-        isAvailable = false;
+      const win = window as any;
+      if (walletId === 'freighter' && (win.freighterApi || win.stellar?.isFreighter)) {
+        isAvailable = true;
+      } else {
+        try {
+          isAvailable = await walletModule.isAvailable();
+        } catch (err) {
+          isAvailable = false;
+        }
       }
       if (!isAvailable) {
         throw new Error(`${walletId.toUpperCase()} extension is not installed.`);
@@ -74,6 +102,25 @@ const UserSettings = () => {
       alert(`Successfully connected ${walletId.toUpperCase()} wallet: ${address}`);
     } catch (err: any) {
       setWalletError(err.message || "Failed to connect wallet.");
+    } finally {
+      setConnectingWallet(false);
+    }
+  };
+
+  const disconnectUserWallet = async () => {
+    if (!window.confirm("Are you sure you want to disconnect your connected wallet?")) return;
+    setConnectingWallet(true);
+    setWalletError("");
+    try {
+      if (auth.currentUser) {
+        await updateDoc(doc(db, "users", auth.currentUser.uid), {
+          publicKey: deleteField(),
+          walletType: deleteField()
+        });
+      }
+      alert("Wallet disconnected successfully!");
+    } catch (err: any) {
+      setWalletError(err.message || "Failed to disconnect wallet.");
     } finally {
       setConnectingWallet(false);
     }
@@ -522,39 +569,53 @@ const UserSettings = () => {
         ) : (
           <div className="space-y-6 animate-fadeIn">
             {/* Wallet Extension Connector Section */}
-            <div>
-              <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Connect Web3 Stellar Wallet</p>
-              <p className={`text-xs mt-1 leading-relaxed ${textMuted} mb-4`}>
-                Link your Freighter, xBull, or Lobstr browser extension wallet using standard connection protocols.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <button
-                  type="button"
-                  onClick={() => connectUserWallet("freighter")}
-                  disabled={connectingWallet}
-                  className="py-3 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
-                >
-                  Freighter
-                </button>
-                <button
-                  type="button"
-                  onClick={() => connectUserWallet("xbull")}
-                  disabled={connectingWallet}
-                  className="py-3 bg-purple-600/10 hover:bg-purple-600/20 text-purple-500 border border-purple-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
-                >
-                  xBull
-                </button>
-                <button
-                  type="button"
-                  onClick={() => connectUserWallet("lobstr")}
-                  disabled={connectingWallet}
-                  className="py-3 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-500 border border-emerald-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50"
-                >
-                  Lobstr
-                </button>
+            {userData?.publicKey ? (
+              <div>
+                <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Connected Stellar Wallet</p>
+                <p className={`text-xs mt-1 leading-relaxed ${textMuted} mb-4`}>
+                  You have connected an external Stellar Wallet extension.
+                </p>
+                <div className={`p-4 rounded-xl border flex flex-col sm:flex-row justify-between sm:items-center gap-4 bg-opacity-20 ${dark ? 'bg-black border-white/10' : 'bg-gray-50 border-gray-200'}`}>
+                  <div>
+                    <span className={`px-2.5 py-1 text-[10px] font-black uppercase rounded-full ${theme.badgeBg}`}>
+                      {userData?.walletType || "External Wallet"}
+                    </span>
+                    <p className={`text-xs font-mono break-all mt-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                      {userData?.publicKey}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={disconnectUserWallet}
+                    disabled={connectingWallet}
+                    className="px-4 py-2.5 bg-red-600/10 hover:bg-red-600/20 text-red-500 border border-red-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50 shrink-0"
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </div>
-              {walletError && <p className="text-red-500 text-xs font-bold mt-2">{walletError}</p>}
-            </div>
+            ) : (
+              <div>
+                <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Connect Web3 Stellar Wallet</p>
+                <p className={`text-xs mt-1 leading-relaxed ${textMuted} mb-4`}>
+                  Link your Freighter browser extension wallet using standard connection protocols.
+                </p>
+                <div className="grid grid-cols-1 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => connectUserWallet("freighter")}
+                    disabled={connectingWallet}
+                    className="py-3 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/20 rounded-xl font-bold text-xs uppercase tracking-wider transition-all active:scale-95 disabled:opacity-50 flex flex-col items-center gap-1 w-full"
+                  >
+                    <span style={{ fontWeight: 800 }}>Connect Freighter Wallet</span>
+                    <span className="text-[10px] opacity-75">
+                      {freighterDetected ? "● Detected" : "○ Not Detected"}
+                    </span>
+                  </button>
+                </div>
+                {walletError && <p className="text-red-500 text-xs font-bold mt-2">{walletError}</p>}
+              </div>
+            )}
 
             <div className={`border-t border-dashed pt-6 ${dark ? 'border-white/5' : 'border-gray-200'}`}>
               <p className={`font-extrabold text-sm ${dark ? 'text-white' : 'text-gray-900'}`}>Import Raw Secret Key (Offline Fallback)</p>
@@ -568,7 +629,7 @@ const UserSettings = () => {
                 value={importKey}
                 onChange={(e) => setImportKey(e.target.value)}
                 className={`w-full px-4 py-3 rounded-xl border text-xs focus:outline-none focus:ring-1 ${theme.inputRing} ${
-                  dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-600' : 'bg-gray-50 border-gray-200 text-gray-900'
+                  dark ? 'bg-white/5 border-white/10 text-white placeholder-gray-400' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500'
                 } mb-3`}
               />
 

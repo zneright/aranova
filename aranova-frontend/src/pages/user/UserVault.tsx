@@ -56,6 +56,9 @@ const UserVault = () => {
   // Loading status state
   const [processingState, setProcessingState] = useState<string | null>(null);
 
+  const [offlineReserve, setOfflineReserve] = useState(0);
+  const [inputReserve, setInputReserve] = useState("");
+
   // Sync routingPct and terms state from profile
   useEffect(() => {
     if (userData) {
@@ -64,6 +67,9 @@ const UserVault = () => {
       }
       if (userData.vaultPreferredDays !== undefined) {
         setLockDays(userData.vaultPreferredDays.toString());
+      }
+      if (userData.offlineReserve !== undefined) {
+        setOfflineReserve(userData.offlineReserve);
       }
       setShowTermsModal(!userData.vaultTermsAgreed);
     }
@@ -221,6 +227,26 @@ const UserVault = () => {
     }
   };
 
+  const handleSetOfflineReserve = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amt = Number(inputReserve);
+    if (isNaN(amt) || amt < 0) return alert("Please enter a valid amount.");
+    if (amt > walletBalance) return alert("Offline reserve cannot exceed your current wallet balance.");
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, "users", userData.uid), {
+        offlineReserve: amt
+      });
+      setOfflineReserve(amt);
+      setInputReserve("");
+      alert(`Successfully locked ${amt} XLM into your Offline Reserve Buffer!`);
+    } catch (err) {
+      console.warn("Failed to set offline reserve:", err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleAgreeTerms = async () => {
     if (!userData?.uid) return;
 
@@ -260,7 +286,7 @@ const UserVault = () => {
         const amountStroops = BigInt(Math.round(calculatedLockAmount * 10_000_000));
         
         setProcessingState("Simulating smart contract on Soroban...");
-        const txHash = await lockVaultOnChain(userData.publicKey, amountStroops, handler);
+        const txHash = await lockVaultOnChain(userData.publicKey, amountStroops, daysVal, handler);
         console.log("On-chain vault lock successful:", txHash);
 
         setProcessingState("Recording metadata & sync...");
@@ -1078,6 +1104,46 @@ const UserVault = () => {
     );
   };
 
+  const renderOfflineReserveCard = () => {
+    return (
+      <div className={`p-6 rounded-[28px] border shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md ${theme.card}`}>
+        <div className="flex justify-between items-center mb-3">
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-wide text-gray-400">Offline Reserve Buffer</h3>
+            <p className="text-[10px] text-gray-500 font-semibold mt-0.5">Funds reserved for offline Bluetooth payments</p>
+          </div>
+          <span className="text-2xl font-black text-amber-500">
+            {offlineReserve} XLM
+          </span>
+        </div>
+        <form onSubmit={handleSetOfflineReserve} className="flex gap-2 mt-4">
+          <input
+            type="number"
+            min="0"
+            max={walletBalance}
+            step="any"
+            placeholder="Reserve Amount (XLM)"
+            value={inputReserve}
+            onChange={(e) => setInputReserve(e.target.value)}
+            className={`flex-1 px-4 py-2 text-xs rounded-xl border focus:outline-none focus:ring-1 ${
+              dark ? 'bg-black/40 border-white/10 text-white placeholder-gray-400 focus:ring-amber-500' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500 focus:ring-amber-500'
+            }`}
+          />
+          <button
+            type="submit"
+            disabled={busy}
+            className="px-4 py-2 text-xs font-black uppercase tracking-wider rounded-xl bg-amber-500 text-black hover:bg-amber-400 active:scale-95 transition-all"
+          >
+            Lock
+          </button>
+        </form>
+        <p className="text-[10px] text-gray-500 leading-relaxed font-semibold mt-3">
+          Your spendable online balance will be reduced by your offline reserve. When offline, you can spend up to your reserved balance.
+        </p>
+      </div>
+    );
+  };
+
   // Active Locks List builder
   const renderActiveLocksList = () => (
     <div className={`p-6 rounded-[24px] border shadow-sm flex flex-col ${theme.card}`}>
@@ -1159,6 +1225,11 @@ const UserVault = () => {
       {/* Dynamic Touch Slider (Full 2-column span) */}
       <div className="col-span-2">
         {renderVaultRoutingSliderCard()}
+      </div>
+
+      {/* Offline Reserve Card (Full 2-column span) */}
+      <div className="col-span-2">
+        {renderOfflineReserveCard()}
       </div>
 
       {/* Available Balance Bento Box (Col 1) */}
